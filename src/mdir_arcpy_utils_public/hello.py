@@ -11,13 +11,17 @@ def main() -> None:
 
     :return: None.
     """
+    version_missing = False
     try:
         package_version = version("mdir-arcpy-utils-public")
     except PackageNotFoundError:
-        package_version = "0.0.1"
+        package_version = "unknown"
+        version_missing = True
 
     print("Hello from mdir-arcpy-utils-public!")
     print(f"Version: {package_version}")
+    if version_missing:
+        print("Version metadata not available in this runtime.")
 
 
 if __name__ == "__main__":

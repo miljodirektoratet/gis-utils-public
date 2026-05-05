@@ -9,6 +9,6 @@ from .hello import main
 try:
 	__version__ = version("mdir-arcpy-utils-public")
 except PackageNotFoundError:
-	__version__ = "0.0.1"
+	__version__ = "unknown"
 
 __all__ = ["main", "__version__"]

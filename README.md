@@ -50,13 +50,13 @@ If your runtime does not have `git` installed (for example in AGOL notebook envi
 pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@main"
 
 # tag (release workflow)
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.1"
+pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.3"
 
 # commit (strict reproducibility)
 pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@cff3f70b85822c82204c0e66876c240fbebeb563"
 
 # no-git fallback: install from tag ZIP archive
-pip install "https://github.com/miljodirektoratet/arcpy-utils-public/archive/refs/tags/v0.0.1.zip"
+pip install "https://github.com/miljodirektoratet/arcpy-utils-public/archive/refs/tags/v0.0.3.zip"
 
 # run the hello entrypoint
 python -m mdir_arcpy_utils_public.hello
@@ -92,20 +92,22 @@ pixi run install-editable
 
 The Python release workflow is tag-driven. Pushing a tag matching `v*.*.*` triggers `CD | Python Build and Publish`, which builds package artifacts and uploads them to GitHub Releases.
 
+Before creating a new release tag, update the package version in `pyproject.toml` (`[project].version`) to match the tag version.
+
 ```powershell
 # List tags
 git tag --list
 
 # Example: create and push a release tag
-git tag -a v0.0.1 -m "release v0.0.1"
-git push origin v0.0.1
+git tag -a v0.0.3 -m "release v0.0.3"
+git push origin v0.0.3
 
 # Delete wrong tag
-git tag -d v.0.0.1
+git tag -d v.0.0.3
 ```
 
 After deployment, install from the tagged release reference:
 
 ```powershell
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.1"
+pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.3"
 ```
