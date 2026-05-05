@@ -83,9 +83,15 @@ pixi run install-editable
 The Python release workflow is tag-driven. Pushing a tag matching `v*.*.*` triggers `CD | Python Build and Publish`, which builds package artifacts and uploads them to GitHub Releases.
 
 ```powershell
+# List tags
+git tag --list
+
 # Example: create and push a release tag
-git tag v0.0.1
+git tag -a v0.0.1 -m "release v0.0.1"
 git push origin v0.0.1
+
+# Delete wrong tag
+git tag -d v.0.0.1
 ```
 
 After deployment, install from the tagged release reference:
