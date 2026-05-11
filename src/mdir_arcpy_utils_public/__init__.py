@@ -11,4 +11,4 @@ try:
 except PackageNotFoundError:
 	__version__ = "unknown"
 
-__all__ = ["main", "add_users_to_group", "__version__"]
+__all__ = ["main", "agol_add_users_to_group", "__version__"]
