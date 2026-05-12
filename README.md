@@ -1,6 +1,6 @@
 # arcgis-utils-public
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Release](https://img.shields.io/github/v/release/miljodirektoratet/arcpy-utils-public?logo=python)](https://github.com/miljodirektoratet/arcpy-utils-public/releases) [![CI Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcpy-utils-public/ci-python.yml?branch=main&label=CI%20Python&style=flat)](https://github.com/miljodirektoratet/arcpy-utils-public/actions/workflows/ci-python.yml) [![CD Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcpy-utils-public/cd-python.yml?label=CD%20Python&style=flat)](https://github.com/miljodirektoratet/arcpy-utils-public/actions/workflows/cd-python.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Release](https://img.shields.io/github/v/release/miljodirektoratet/arcgis-utils-public?logo=python)](https://github.com/miljodirektoratet/arcgis-utils-public/releases) [![CI Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcgis-utils-public/ci-python.yml?branch=main&label=CI%20Python&style=flat)](https://github.com/miljodirektoratet/arcgis-utils-public/actions/workflows/ci-python.yml) [![CD Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcgis-utils-public/cd-python.yml?label=CD%20Python&style=flat)](https://github.com/miljodirektoratet/arcgis-utils-public/actions/workflows/cd-python.yml)
 
 Python utility package for ArcGIS Pro 3.5 and AGOL/ESRI-related tasks at the Norwegian Environment Agency (miljødirektoratet).
 
@@ -33,11 +33,11 @@ Python utility package for ArcGIS Pro 3.5 and AGOL/ESRI-related tasks at the Nor
 
 ## Workflow Statuses
 
-| Job               | Status                                                                                                                                              | Description                                            |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| **CI Python**     | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcpy-utils-public/ci-python.yml?branch=main&label=&style=flat)   | Package install smoke test and package build/inspect   |
-| **CD Python**     | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcpy-utils-public/cd-python.yml?label=&style=flat)               | Build package artifacts and publish to GitHub Releases |
-| **Security Scan** | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcpy-utils-public/scan-codeql.yml?branch=main&label=&style=flat) | CodeQL security scanning                               |
+| Job               | Status                                                                                                                                               | Description                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **CI Python**     | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcgis-utils-public/ci-python.yml?branch=main&label=&style=flat)   | Package install smoke test and package build/inspect   |
+| **CD Python**     | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcgis-utils-public/cd-python.yml?label=&style=flat)               | Build package artifacts and publish to GitHub Releases |
+| **Security Scan** | ![Status](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/arcgis-utils-public/scan-codeql.yml?branch=main&label=&style=flat) | CodeQL security scanning                               |
 
 ## Package Installation
 
@@ -47,16 +47,16 @@ If your runtime does not have `git` installed (for example in AGOL notebook envi
 
 ```powershell
 # main branch (fast iteration)
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@main"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@main"
 
 # tag (release workflow)
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.3"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@v0.0.3"
 
 # commit (strict reproducibility)
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@cff3f70b85822c82204c0e66876c240fbebeb563"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@cff3f70b85822c82204c0e66876c240fbebeb563"
 
 # no-git fallback: install from tag ZIP archive
-pip install "https://github.com/miljodirektoratet/arcpy-utils-public/archive/refs/tags/v0.0.3.zip"
+pip install "https://github.com/miljodirektoratet/arcgis-utils-public/archive/refs/tags/v0.0.3.zip"
 
 # run the hello entrypoint
 python -m arcgis_utils_public.hello
@@ -90,13 +90,13 @@ If you already have ArcGIS Pro installed with its own Conda environment, you can
 conda activate <your-arcgis-env-name>
 
 # Install from source (editable)
-pip install -e "git+https://github.com/miljodirektoratet/arcpy-utils-public.git#egg=arcgis-utils-public"
+pip install -e "git+https://github.com/miljodirektoratet/arcgis-utils-public.git#egg=arcgis-utils-public"
 
 # Or install from a release tag
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.3"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@v0.0.3"
 
 # Or install from main branch
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@main"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@main"
 ```
 
 **Note:** The `environment.yml` file is a complete standalone environment. It's only needed if you want a dedicated project environment. For installing into an existing ArcGIS Pro environment, use `pip` only.
@@ -128,5 +128,5 @@ git tag -d v.0.0.3
 After deployment, install from the tagged release reference:
 
 ```powershell
-pip install "git+https://github.com/miljodirektoratet/arcpy-utils-public.git@v0.0.3"
+pip install "git+https://github.com/miljodirektoratet/arcgis-utils-public.git@v0.0.3"
 ```

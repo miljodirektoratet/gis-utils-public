@@ -40,11 +40,11 @@ jobs:
 
             Install directly from this release:
             ```bash
-            pip install https://github.com/miljodirektoratet/arcpy-utils-public/releases/download/${{ github.ref_name }}/arcgis_utils_public-*.whl
+            pip install https://github.com/miljodirektoratet/arcgis-utils-public/releases/download/${{ github.ref_name }}/arcgis_utils_public-*.whl
             ```
 
             Or from the repository:
             ```bash
-            pip install git+https://github.com/miljodirektoratet/arcpy-utils-public.git@${{ github.ref_name }}
+            pip install git+https://github.com/miljodirektoratet/arcgis-utils-public.git@${{ github.ref_name }}
             ```
           fail_on_unmatched_files: true

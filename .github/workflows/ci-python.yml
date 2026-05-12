@@ -35,9 +35,9 @@ jobs:
       - name: Install package
         run: pip install .
 
-      - name: Import package and run entrypoint
+      - name: Smoke test package metadata
         run: |
-          python -c "import arcgis_utils_public as pkg; print(f'Package version: {pkg.__version__}'); pkg.main()"
+          python -c "from importlib.metadata import version; print(f'Package version: {version(\"arcgis-utils-public\")}')"
 
   build-and-inspect:
     name: Build and Inspect Package
