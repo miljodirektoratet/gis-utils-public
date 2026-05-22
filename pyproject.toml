@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "gdal>=3.12.2",
+    # "gdal>=3.12.2",
     "rasterio>=1.4.4",
 ]
 
