@@ -21,12 +21,18 @@ if TYPE_CHECKING:
 	from . import (
 		agol_user_admin, 
 		yaml_config_arcgis,
+		arcgis_checks,
+		arcgispro_map_utils,
+		arcgispro_layer_utils
 		# module_1,  # Example for adding a new module
   )
 
 __all__ = [
 	"agol_user_admin",
 	"yaml_config_arcgis",
+	"arcgis_checks",
+	"arcgispro_map_utils",
+	"arcgispro_layer_utils",
   # "module_1",
 	]
 
