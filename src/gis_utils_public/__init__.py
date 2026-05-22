@@ -46,6 +46,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 # OPEN-GIS IMPORTS (safe on all platforms)
 from .main import main
+from .yaml_config import read_yml_config
 
 # ArcGIS SUBPACKAGE (imported as namespace, not eagerly loaded)
 # NOTE: Do NOT import specific functions or modules from arcgis_utils here—
@@ -59,4 +60,4 @@ except PackageNotFoundError:
 	__version__ = "unknown"
 
 # Public API
-__all__ = ["main", "arcgis_utils", "__version__"]
+__all__ = ["main", "read_yml_config", "arcgis_utils", "__version__"]

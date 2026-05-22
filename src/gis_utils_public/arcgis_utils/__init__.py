@@ -20,11 +20,13 @@ if TYPE_CHECKING:
 	# Helps code editors (vscode etc.) recognize available modules without loading ArcGIS code.
 	from . import (
 		agol_user_admin, 
+		yaml_config_arcgis,
 		# module_1,  # Example for adding a new module
   )
 
 __all__ = [
 	"agol_user_admin",
+	"yaml_config_arcgis",
   # "module_1",
 	]
 
