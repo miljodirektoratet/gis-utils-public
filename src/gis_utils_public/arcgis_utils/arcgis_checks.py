@@ -1,6 +1,7 @@
 """ArcGIS Pro runtime and project access checks."""
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -10,6 +11,18 @@ import arcpy
 LOGGER = logging.getLogger(__name__)
 
 # --- Shared helpers ---
+
+
+def _clear_workspace_cache() -> None:
+    """Clear ArcGIS workspace cache in a best-effort way.
+
+    :return: None.
+    """
+    try:
+        arcpy.ClearWorkspaceCache_management()
+        LOGGER.info("ArcGIS workspace cache cleared.")
+    except Exception as exc:
+        LOGGER.warning("Failed to clear ArcGIS workspace cache: %s", exc)
 
 
 # --- Helpers for checking ArcGIS Runtime env and project/layer access ---
@@ -48,6 +61,72 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
     except Exception as e:
         LOGGER.error("Error accessing project: %s", e)
         return False
+
+
+def save_and_close_arcgispro_project(
+    aprx: Any,
+    save_mode: str = "overwrite",
+    copy_path: str | None = None,
+    aprx_dir: str | None = None,
+    data_product: str | None = None,
+    stop_requested: bool = False,
+    clear_workspace_cache: bool = True,
+) -> dict[str, Any]:
+    """Save ArcGIS project according to mode and release project references.
+
+    Save modes:
+    - ``overwrite``: Save in place if writable; if read-only, skip save.
+    - ``copy``: Save a copy to ``copy_path`` or ``<aprx_dir>/<data_product>_copy.aprx``.
+    - ``none``: Do not save.
+
+    :param aprx: ArcGISProject object.
+    :param save_mode: Save mode value.
+    :param copy_path: Optional explicit copy target path.
+    :param aprx_dir: APRX directory used when building default copy path.
+    :param data_product: Data product name used when building default copy path.
+    :param stop_requested: If True, skip save operations.
+    :param clear_workspace_cache: If True, clear ArcGIS workspace cache after close.
+    :return: Result dictionary with ``APRX``, ``SAVED``, and ``COPY_PATH``.
+    """
+    result = {
+        "APRX": None,
+        "SAVED": False,
+        "COPY_PATH": copy_path,
+    }
+
+    if aprx is None:
+        return result
+
+    normalized_mode = str(save_mode).strip().lower()
+
+    try:
+        if bool(stop_requested):
+            LOGGER.info("Stop requested; skipping save.")
+        elif normalized_mode == "none":
+            LOGGER.info("SAVE_MODE=none; skipping save.")
+        elif normalized_mode == "overwrite":
+            if aprx.isReadOnly:
+                LOGGER.info("Project is read-only; skipping in-place save.")
+            else:
+                aprx.save()
+                result["SAVED"] = True
+        elif normalized_mode == "copy":
+            if not result["COPY_PATH"]:
+                if not isinstance(aprx_dir, str) or not aprx_dir.strip():
+                    raise ValueError("aprx_dir is required when save_mode='copy'")
+                if not isinstance(data_product, str) or not data_product.strip():
+                    raise ValueError("data_product is required when save_mode='copy'")
+                result["COPY_PATH"] = os.path.join(aprx_dir, f"{data_product}_copy.aprx")
+            aprx.saveACopy(result["COPY_PATH"])
+            result["SAVED"] = True
+        else:
+            raise ValueError("save_mode must be one of: overwrite, copy, none")
+    finally:
+        del aprx
+        if bool(clear_workspace_cache):
+            _clear_workspace_cache()
+
+    return result
 
 
 def report_project_metadata(
