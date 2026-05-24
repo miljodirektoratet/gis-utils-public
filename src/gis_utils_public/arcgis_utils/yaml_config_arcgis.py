@@ -1,6 +1,9 @@
-"""Configuration helpers for the YAML config files:
-- ArcGIS Map Service Definition: <data-product>_map_service_definition.yml
-- ..
+"""Configuration helpers for ArcGIS map service YAML files.
+
+Public functions:
+- load_map_service_config: Load and split map/layer sections from YAML.
+- resolve_sde_connection: Resolve SDE path from env-keyed or direct config.
+- validate_lyr_source_sde_paths: Validate configured datasets against SDE paths.
 """
 
 import logging

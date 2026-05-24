@@ -1,4 +1,9 @@
-"""ArcGIS Pro map-related helper functions."""
+"""ArcGIS Pro map-related helper functions.
+
+Public functions:
+- set_map_metadata_from_config: Apply map metadata values from configuration.
+- enable_unique_numeric_ids: Enable stable numeric layer IDs for publishing.
+"""
 
 import logging
 from typing import Any, Mapping

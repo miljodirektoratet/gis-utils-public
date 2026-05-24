@@ -1,4 +1,8 @@
-"""AGOL group administration helpers."""
+"""AGOL group administration helpers.
+
+Public functions:
+- agol_add_users_to_group: Add OIDC and ArcGIS users to an AGOL group in batches.
+"""
 
 import re
 import sys

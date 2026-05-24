@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 LOGGER = logging.getLogger(__name__)
 
 
-def main() -> None:
+def hello() -> None:
     """
     Display welcome message and package version information.
 
@@ -29,4 +29,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    hello()

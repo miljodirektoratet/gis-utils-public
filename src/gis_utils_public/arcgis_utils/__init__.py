@@ -1,15 +1,31 @@
-"""ArcGIS-dependent utilities.
+"""Lazy-loaded ArcGIS utility modules.
 
-This subpackage does not import ArcGIS modules during package initialization.
-ArcGIS modules are loaded only when explicitly accessed via ``__getattr__``,
-so importing ``gis_utils_public`` does not throw errors in environments without ArcGIS.
+Provides ArcGIS-related helper modules that are imported on demand.
 
-Example for adding a new module ``module_1.py`` with ``function_a``:
-1. Add ``module_1`` to ``TYPE_CHECKING`` imports.
-2. Add "module_1" to ``__all__``.
-3. No change is needed in ``__getattr__`` because it loads names from ``__all__``.
-4. Consumers can then call ``arcgis_utils.module_1.function_a(...)``.
+Usage requirements:
+- Run from an ArcGIS Pro conda environment.
+- Install this sub-package without dependencies. 
+- pip install --no-deps "git+https://github.com/miljodirektoratet/gis-utils-public.git@main"
+
+Available modules:
+- agol_user_admin
+- yaml_config_arcgis
+- arcgispro_project_utils
+- arcgispro_map_utils
+- arcgispro_layer_utils
 """
+
+# ArcGIS-dependent utilities.
+#
+# This subpackage does not import ArcGIS modules during package initialization.
+# ArcGIS modules are loaded only when explicitly accessed via ``__getattr__``,
+# so importing ``gis_utils_public`` does not throw errors in environments without ArcGIS.
+#
+# Example for adding a new module ``module_1.py`` with ``function_a``:
+# 1. Add ``module_1`` to ``TYPE_CHECKING`` imports.
+# 2. Add "module_1" to ``__all__``.
+# 3. No change is needed in ``__getattr__`` because it loads names from ``__all__``.
+# 4. Consumers can then call ``arcgis_utils.module_1.function_a(...)``.
 
 from __future__ import annotations
 
@@ -21,7 +37,7 @@ if TYPE_CHECKING:
     # without loading ArcGIS code.
     from . import (
         agol_user_admin,
-        arcgis_checks,
+        arcgispro_project_utils,
         arcgispro_layer_utils,
         arcgispro_map_utils,
         yaml_config_arcgis,
@@ -31,7 +47,7 @@ if TYPE_CHECKING:
 __all__ = [
     "agol_user_admin",
     "yaml_config_arcgis",
-    "arcgis_checks",
+    "arcgispro_project_utils",
     "arcgispro_map_utils",
     "arcgispro_layer_utils",
     # "module_1",

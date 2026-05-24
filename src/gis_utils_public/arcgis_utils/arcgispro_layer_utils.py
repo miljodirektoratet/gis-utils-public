@@ -1,4 +1,8 @@
-"""ArcGIS Pro layer-related helper functions."""
+"""ArcGIS Pro layer-related helper functions.
+
+Public functions:
+- None currently exposed.
+"""
 
 import logging
 

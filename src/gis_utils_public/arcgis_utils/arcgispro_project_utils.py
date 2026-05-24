@@ -1,4 +1,10 @@
-"""ArcGIS Pro runtime and project access checks."""
+"""ArcGIS Pro project lifecycle and metadata utilities.
+
+Public functions:
+- check_arcgispro_project_writable: Verify that an APRX can be opened for writing.
+- save_and_close_arcgispro_project: Save APRX by mode and release references.
+- report_arcgispro_project_metadata: Print/read basic project and layer metadata.
+"""
 
 import logging
 import os
@@ -10,11 +16,9 @@ import arcpy
 
 LOGGER = logging.getLogger(__name__)
 
-# --- Shared helpers ---
 
-
-def _clear_workspace_cache() -> None:
-    """Clear ArcGIS workspace cache in a best-effort way.
+def _clear_arcgispro_workspace_cache() -> None:
+    """Clear ArcGIS Pro workspace cache.
 
     :return: None.
     """
@@ -25,15 +29,13 @@ def _clear_workspace_cache() -> None:
         LOGGER.warning("Failed to clear ArcGIS workspace cache: %s", exc)
 
 
-# --- Helpers for checking ArcGIS Runtime env and project/layer access ---
-def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
-    """
-    Check if the ArcGIS project is accessible and not locked by ArcGIS Pro.
+def check_arcgispro_project_writable(aprx_path: str) -> bool:
+    """Check if an ArcGIS Pro project is writable.
 
-    Tries to open the project; if locked/read-only, prompts user to wait or stop.
+    Tries to open the project. If locked/read-only, prompts user to wait or stop.
 
     :param aprx_path: Path to ArcGIS Pro project file (.aprx).
-    :return: True if project is accessible, False if user chose to stop.
+    :return: True if project is writable, False if user chose to stop.
     """
     try:
         test_aprx = arcpy.mp.ArcGISProject(aprx_path)
@@ -43,23 +45,20 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
         if is_locked:
             LOGGER.error("Project is locked or read-only.")
             while True:
-                response = (
-                    input("  wait and retry / stop? [wait/stop]: ").lower().strip()
-                )
+                response = input("  wait and retry / stop? [wait/stop]: ").lower().strip()
                 if response == "wait":
                     LOGGER.info("  Waiting 30 seconds...")
                     time.sleep(30)
-                    return check_arcgispro_project_is_closed(aprx_path)  # Retry
-                elif response == "stop":
+                    return check_arcgispro_project_writable(aprx_path)
+                if response == "stop":
                     LOGGER.error("  Stopping pipeline.")
                     return False
-                else:
-                    LOGGER.info("  Invalid response. Enter 'wait' or 'stop'.")
-        
+                LOGGER.info("  Invalid response. Enter 'wait' or 'stop'.")
+
         LOGGER.info("Project is accessible and writable check passed (isReadOnly=False).")
         return True
-    except Exception as e:
-        LOGGER.error("Error accessing project: %s", e)
+    except Exception as exc:
+        LOGGER.error("Error accessing project: %s", exc)
         return False
 
 
@@ -124,12 +123,12 @@ def save_and_close_arcgispro_project(
     finally:
         del aprx
         if bool(clear_workspace_cache):
-            _clear_workspace_cache()
+            _clear_arcgispro_workspace_cache()
 
     return result
 
 
-def report_project_metadata(
+def report_arcgispro_project_metadata(
     aprx: Any,
     map_name: str | None = None,
     label: str = "Project metadata",
@@ -185,20 +184,20 @@ def report_project_metadata(
                 out_msg("  -> No map found with this name.")
             return
 
-        for m in target_maps:
-            out_msg("  MAP: %s" % m.name)
-            out_msg("    layer_count: %s" % len(m.listLayers()))
+        for map_obj in target_maps:
+            out_msg("  MAP: %s" % map_obj.name)
+            out_msg("    layer_count: %s" % len(map_obj.listLayers()))
 
-            for lyr in m.listLayers():
-                if lyr.isGroupLayer or lyr.isBasemapLayer:
+            for layer_obj in map_obj.listLayers():
+                if layer_obj.isGroupLayer or layer_obj.isBasemapLayer:
                     continue
 
                 try:
-                    fields = arcpy.ListFields(lyr)
+                    fields = arcpy.ListFields(layer_obj)
                     col_count = len(fields) if fields else 0
-                    out_msg("      [-]: %s [fields: %s]" % (lyr.name, col_count))
+                    out_msg("      [-]: %s [fields: %s]" % (layer_obj.name, col_count))
                 except Exception:
-                    out_msg("      [-]: %s [fields: N/A]" % lyr.name)
+                    out_msg("      [-]: %s [fields: N/A]" % layer_obj.name)
     finally:
         out_msg("-" * 50)
         if created_local_project:
