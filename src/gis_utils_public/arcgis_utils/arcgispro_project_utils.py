@@ -24,7 +24,6 @@ def _clear_arcgispro_workspace_cache() -> None:
     """
     try:
         arcpy.ClearWorkspaceCache_management()
-        LOGGER.info("ArcGIS workspace cache cleared.")
     except Exception as exc:
         LOGGER.warning("Failed to clear ArcGIS workspace cache: %s", exc)
 
@@ -92,6 +91,7 @@ def save_and_close_arcgispro_project(
         "SAVED": False,
         "COPY_PATH": copy_path,
     }
+    saved_path: str | None = None
 
     if aprx is None:
         return result
@@ -109,6 +109,7 @@ def save_and_close_arcgispro_project(
             else:
                 aprx.save()
                 result["SAVED"] = True
+                saved_path = getattr(aprx, "filePath", None)
         elif normalized_mode == "copy":
             if not result["COPY_PATH"]:
                 if not isinstance(aprx_dir, str) or not aprx_dir.strip():
@@ -118,8 +119,12 @@ def save_and_close_arcgispro_project(
                 result["COPY_PATH"] = os.path.join(aprx_dir, f"{data_product}_copy.aprx")
             aprx.saveACopy(result["COPY_PATH"])
             result["SAVED"] = True
+            saved_path = result["COPY_PATH"]
         else:
             raise ValueError("save_mode must be one of: overwrite, copy, none")
+
+        if result["SAVED"] and isinstance(saved_path, str) and saved_path.strip():
+            LOGGER.info("Project saved to path: %s", saved_path)
     finally:
         del aprx
         if bool(clear_workspace_cache):
