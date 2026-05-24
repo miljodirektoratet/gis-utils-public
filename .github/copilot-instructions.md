@@ -70,6 +70,7 @@ Tech stack: ArcGIS Pro, AGOL, Python (conda-based)
 - Use f-strings for string formatting (print statements, etc)
 - Use `%` for string formatting in log messages
 - Organize imports: standard library, third-party, local modules
+- Do not implement fallbacks mechanisms to old functionality unless explicitly requested (e.g. for backward compatibility with older package versions)
 
 ### Python: Performance Considerations
 
