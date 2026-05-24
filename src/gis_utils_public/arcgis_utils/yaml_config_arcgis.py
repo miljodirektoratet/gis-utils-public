@@ -5,7 +5,7 @@
 
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from ..yaml_config import read_yml_config
 
@@ -112,15 +112,18 @@ def validate_lyr_source_sde_paths(
     config: dict[str, Any] | None,
     sde_path: str | None = None,
     layers_dict: list[tuple[str, dict[str, Any]]] | None = None,
+    emit: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Validate layer source dataset paths against SDE.
 
     :param config: Parsed map service configuration.
     :param sde_path: Optional SDE connection path override.
     :param layers_dict: Optional list of (layer_name, layer_cfg) tuples.
+    :param emit: Optional output callback. Defaults to ``print``.
     :return: Validation report list per layer.
     """
     LOGGER.debug("Validating layer source SDE paths")
+    out_msg = emit if callable(emit) else print
     try:
         import arcpy
     except Exception as exc:
@@ -155,13 +158,13 @@ def validate_lyr_source_sde_paths(
             else (None, None)
         )
 
-        print(f"\nLayer: {layer_name}")
-        print(f"  sde_connection: {sde_path}")
-        print(f"  feature_dataset: {feature_dataset}")
-        print(f"  dataset: {dataset}")
+        out_msg(f"\nLayer: {layer_name}")
+        out_msg(f"  sde_connection: {sde_path}")
+        out_msg(f"  feature_dataset: {feature_dataset}")
+        out_msg(f"  dataset: {dataset}")
 
         if not sde_path:
-            print("  [MISSING] No SDE connection resolved for this layer.")
+            out_msg("  [MISSING] No SDE connection resolved for this layer.")
             report.append(
                 {
                     "layer": layer_name,
@@ -171,7 +174,7 @@ def validate_lyr_source_sde_paths(
             )
             continue
         if not feature_dataset or not dataset:
-            print("  [MISSING] source.feature_dataset and/or source.dataset.")
+            out_msg("  [MISSING] source.feature_dataset and/or source.dataset.")
             report.append(
                 {
                     "layer": layer_name,
@@ -186,10 +189,10 @@ def validate_lyr_source_sde_paths(
         exists_via_fd = bool(arcpy.Exists(ds_path_via_fd))
         exists_direct = bool(arcpy.Exists(ds_path_direct))
 
-        print(
+        out_msg(
             f"  [{'OK' if exists_via_fd else 'MISSING'}] dataset via feature_dataset: {ds_path_via_fd}"
         )
-        print(
+        out_msg(
             f"  [{'OK' if exists_direct else 'MISSING'}] dataset direct: {ds_path_direct}"
         )
 

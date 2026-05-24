@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from importlib.metadata import PackageNotFoundError, version
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -18,10 +22,10 @@ def main() -> None:
         package_version = "unknown"
         version_missing = True
 
-    print("Hello from gis-utils-public!")
-    print(f"Version: {package_version}")
+    LOGGER.info("Hello from gis-utils-public!")
+    LOGGER.info("Version: %s", package_version)
     if version_missing:
-        print("Version metadata not available in this runtime.")
+        LOGGER.warning("Version metadata not available in this runtime.")
 
 
 if __name__ == "__main__":

@@ -62,7 +62,7 @@ def report_project_metadata(
     :return: None.
     """
     created_local_project = False
-    out = emit if callable(emit) else print
+    out_msg = emit if callable(emit) else print
 
     if isinstance(aprx, str):
         aprx = arcpy.mp.ArcGISProject(aprx)
@@ -73,30 +73,30 @@ def report_project_metadata(
         raise ValueError("map_name must be None or a non-empty string")
 
     try:
-        out("\n--- [%s] ---" % label)
-        out("  path: %s" % aprx.filePath)
-        out("  is_read_only: %s" % aprx.isReadOnly)
-        out("  map_count: %s" % len(aprx.listMaps()))
+        out_msg("\n--- [%s] ---" % label)
+        out_msg("  path: %s" % aprx.filePath)
+        out_msg("  is_read_only: %s" % aprx.isReadOnly)
+        out_msg("  map_count: %s" % len(aprx.listMaps()))
         if map_name is None:
             target_maps = aprx.listMaps()
         else:
             target_maps = aprx.listMaps(map_name)
 
         if map_name is None:
-            out("  Metadata report: ALL")
+            out_msg("  Metadata report: ALL")
         else:
-            out("  Metadata report:  %s" % map_name)
+            out_msg("  Metadata report:  %s" % map_name)
 
         if not target_maps:
             if map_name is None:
-                out("  -> No maps found in project.")
+                out_msg("  -> No maps found in project.")
             else:
-                out("  -> No map found with this name.")
+                out_msg("  -> No map found with this name.")
             return
 
         for m in target_maps:
-            out("  MAP: %s" % m.name)
-            out("    layer_count: %s" % len(m.listLayers()))
+            out_msg("  MAP: %s" % m.name)
+            out_msg("    layer_count: %s" % len(m.listLayers()))
 
             for lyr in m.listLayers():
                 if lyr.isGroupLayer or lyr.isBasemapLayer:
@@ -105,10 +105,10 @@ def report_project_metadata(
                 try:
                     fields = arcpy.ListFields(lyr)
                     col_count = len(fields) if fields else 0
-                    out("      [-]: %s [fields: %s]" % (lyr.name, col_count))
+                    out_msg("      [-]: %s [fields: %s]" % (lyr.name, col_count))
                 except Exception:
-                    out("      [-]: %s [fields: N/A]" % lyr.name)
+                    out_msg("      [-]: %s [fields: N/A]" % lyr.name)
     finally:
-        out("-" * 50)
+        out_msg("-" * 50)
         if created_local_project:
             del aprx
