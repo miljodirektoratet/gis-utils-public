@@ -18,18 +18,20 @@ def agol_add_users_to_group(
     Søk etter brukere i to lister og legg dem til en eksisterende gruppe.
     :param gis:                       Authenticated GIS object (I praksis GIS("home"))
     :param oidc_brukere:              Liste med e-post adresser som skal legges til
-    :param arcgis_brukere:            Liste med brukernavn som skal legges til 
+    :param arcgis_brukere:            Liste med brukernavn som skal legges til
     :param gruppe_navn:               Navn på AGOL gruppe
     :param dry_run:                   Må settes til False for å gjøre endringer.
     :param batch_size:                Antall brukere per remove_users/add_users-kall
     :return: None.
     """
 
-    print(f">>> AGOL organisasjon:            {gis.properties.urlKey}\n"
-          f">>> OIDC-brukere input:           {oidc_brukere}\n"
-          f">>> ArcGIS-brukere input:         {arcgis_brukere}\n"
-          f">>> Gruppe:                       {gruppe_navn}\n"
-          f">>> Dry-Run:                      {dry_run}")
+    print(
+        f">>> AGOL organisasjon:            {gis.properties.urlKey}\n"
+        f">>> OIDC-brukere input:           {oidc_brukere}\n"
+        f">>> ArcGIS-brukere input:         {arcgis_brukere}\n"
+        f">>> Gruppe:                       {gruppe_navn}\n"
+        f">>> Dry-Run:                      {dry_run}"
+    )
 
     if batch_size < 1:
         sys.exit("batch_size må være >= 1")
@@ -42,10 +44,7 @@ def agol_add_users_to_group(
 
     arcgis_brukere = [x.lower() for x in arcgis_brukere]
     duplikat_arcgis = set(x for x in arcgis_brukere if arcgis_brukere.count(x) > 1)
-    duplikat_arcgis = {
-        x.lower() for x in arcgis_brukere
-        if arcgis_brukere.count(x) > 1
-    }
+    duplikat_arcgis = {x.lower() for x in arcgis_brukere if arcgis_brukere.count(x) > 1}
 
     if duplikat_arcgis:
         sys.exit(f"duplikat i arcgis_brukere {duplikat_arcgis}")
@@ -58,7 +57,6 @@ def agol_add_users_to_group(
 
     if not grupper_resultat:
         sys.exit(f"Finner ikke gruppe med navn: {gruppe_navn}")
-
 
     # Hent eksisterende medlemmer i gruppen
     gruppe = grupper_resultat[0]
@@ -80,20 +78,30 @@ def agol_add_users_to_group(
     # Fjern OIDC-brukere
     print(f">>> Eksisterende OIDC-brukerne:   {gruppe_medlemmer_users_oidc}")
     if gruppe_medlemmer_users_oidc:
-        print(f"Fjerner {len(gruppe_medlemmer_users_oidc)} eksisterende OIDC brukere fra gruppen (har epost-adresse som brukernavn)")
-        total_batches = (len(gruppe_medlemmer_users_oidc) + batch_size - 1) // batch_size
+        print(
+            f"Fjerner {len(gruppe_medlemmer_users_oidc)} eksisterende OIDC brukere fra gruppen (har epost-adresse som brukernavn)"
+        )
+        total_batches = (
+            len(gruppe_medlemmer_users_oidc) + batch_size - 1
+        ) // batch_size
         for start_index in range(0, len(gruppe_medlemmer_users_oidc), batch_size):
-            users_batch = gruppe_medlemmer_users_oidc[start_index:start_index + batch_size]
+            users_batch = gruppe_medlemmer_users_oidc[
+                start_index : start_index + batch_size
+            ]
             batch_no = start_index // batch_size + 1
-            print(f"Fjerner OIDC batch {batch_no}/{total_batches} ({len(users_batch)} brukere)")
+            print(
+                f"Fjerner OIDC batch {batch_no}/{total_batches} ({len(users_batch)} brukere)"
+            )
             if not dry_run:
                 try:
                     gruppe.remove_users(users_batch)
                 except Exception as e:
-                    sys.exit(f"Feil ved fjerning av OIDC batch {batch_no}/{total_batches}: {e}")
+                    sys.exit(
+                        f"Feil ved fjerning av OIDC batch {batch_no}/{total_batches}: {e}"
+                    )
     else:
         print("Ingen eksisterende brukere å fjerne.")
-    
+
     # Fjern ArcGIS-brukere - Denne er kommentert ut - normalt er ikke dette nødvendig
     # print(f">>> Eksisterende ArcGIS-brukerne: {gruppe_medlemmer_users_arcgis}")
     # if gruppe_medlemmer_users_arcgis:
@@ -110,7 +118,6 @@ def agol_add_users_to_group(
     #                 sys.exit(f"Feil ved fjerning av ArcGIS batch {batch_no}/{total_batches}: {e}")
     # else:
     #     print("Ingen eksisterende ArcGIS brukere å fjerne.")
-
 
     # Legg OIDC-brukere til gruppe
     oidc_brukere_lagt_til = []
@@ -130,20 +137,25 @@ def agol_add_users_to_group(
         else:
             sys.exit(f"{email} ser ikke ut som en epost-adresse")
     if oidc_brukere_lagt_til:
-        print(f"Legger til {len(oidc_brukere_lagt_til)} OIDC-brukere i gruppen '{gruppe.title}': {oidc_brukere_lagt_til}")
+        print(
+            f"Legger til {len(oidc_brukere_lagt_til)} OIDC-brukere i gruppen '{gruppe.title}': {oidc_brukere_lagt_til}"
+        )
         total_batches = (len(oidc_brukere_lagt_til) + batch_size - 1) // batch_size
         for start_index in range(0, len(oidc_brukere_lagt_til), batch_size):
-            users_batch = oidc_brukere_lagt_til[start_index:start_index + batch_size]
+            users_batch = oidc_brukere_lagt_til[start_index : start_index + batch_size]
             batch_no = start_index // batch_size + 1
-            print(f"Legger til OIDC batch {batch_no}/{total_batches} ({len(users_batch)} brukere)")
+            print(
+                f"Legger til OIDC batch {batch_no}/{total_batches} ({len(users_batch)} brukere)"
+            )
             if not dry_run:
                 try:
                     gruppe.add_users(users_batch)
                 except Exception as e:
-                    sys.exit(f"Feil ved adding av OIDC batch {batch_no}/{total_batches}: {e}")
+                    sys.exit(
+                        f"Feil ved adding av OIDC batch {batch_no}/{total_batches}: {e}"
+                    )
     else:
         print("Ingen brukere i OIDCC-brukere input funnet – ingen ble lagt til.")
-
 
     # Legg ArcGIS-brukere til gruppe, NB! her er ikke brukere slettet siden miljodirektoratet-kontoer må godkjenne at de legges til ei gruppe
     arcgis_brukere_lagt_til = []
@@ -152,7 +164,9 @@ def agol_add_users_to_group(
             try:
                 bruker = gis.users.get(arcgis_username)
             except Exception as e:
-                print(f"Exception: Finner ikke ArcGIS-bruker med brukernavn {arcgis_username}: {e}")
+                print(
+                    f"Exception: Finner ikke ArcGIS-bruker med brukernavn {arcgis_username}: {e}"
+                )
                 continue
             if bruker:
                 arcgis_brukere_lagt_til.append(bruker)
@@ -161,16 +175,24 @@ def agol_add_users_to_group(
         else:
             sys.exit(f"{arcgis_username} ser ut til å være en epost-adresse")
     if arcgis_brukere_lagt_til:
-        print(f"Legger til {len(arcgis_brukere_lagt_til)} ArcGIS-brukere i gruppen '{gruppe.title}': {arcgis_brukere_lagt_til}")
+        print(
+            f"Legger til {len(arcgis_brukere_lagt_til)} ArcGIS-brukere i gruppen '{gruppe.title}': {arcgis_brukere_lagt_til}"
+        )
         total_batches = (len(arcgis_brukere_lagt_til) + batch_size - 1) // batch_size
         for start_index in range(0, len(arcgis_brukere_lagt_til), batch_size):
-            users_batch = arcgis_brukere_lagt_til[start_index:start_index + batch_size]
+            users_batch = arcgis_brukere_lagt_til[
+                start_index : start_index + batch_size
+            ]
             batch_no = start_index // batch_size + 1
-            print(f"Legger til ArcGIS batch {batch_no}/{total_batches} ({len(users_batch)} brukere)")
+            print(
+                f"Legger til ArcGIS batch {batch_no}/{total_batches} ({len(users_batch)} brukere)"
+            )
             if not dry_run:
                 try:
                     gruppe.add_users(users_batch)
                 except Exception as e:
-                    sys.exit(f"Feil ved adding av ArcGIS batch {batch_no}/{total_batches}: {e}")
+                    sys.exit(
+                        f"Feil ved adding av ArcGIS batch {batch_no}/{total_batches}: {e}"
+                    )
     else:
         print("Ingen brukere i ArcGIS-brukere input funnet - ingen ble lagt til.")

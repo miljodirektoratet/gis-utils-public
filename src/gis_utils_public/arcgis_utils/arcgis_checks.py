@@ -10,13 +10,14 @@ LOGGER = logging.getLogger(__name__)
 
 # --- Shared helpers ---
 
+
 # --- Helpers for checking ArcGIS Runtime env and project/layer access ---
 def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
     """
     Check if the ArcGIS project is accessible and not locked by ArcGIS Pro.
-    
+
     Tries to open the project; if locked/read-only, prompts user to wait or stop.
-    
+
     :param aprx_path: Path to ArcGIS Pro project file (.aprx).
     :return: True if project is accessible, False if user chose to stop.
     """
@@ -24,11 +25,13 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
         test_aprx = arcpy.mp.ArcGISProject(aprx_path)
         is_locked = test_aprx.isReadOnly
         del test_aprx
-        
+
         if is_locked:
             LOGGER.info("Project is locked or read-only.")
             while True:
-                response = input("  wait and retry / stop? [wait/stop]: ").lower().strip()
+                response = (
+                    input("  wait and retry / stop? [wait/stop]: ").lower().strip()
+                )
                 if response == "wait":
                     LOGGER.info("  Waiting 30 seconds...")
                     time.sleep(30)
@@ -78,7 +81,6 @@ def report_project_metadata(
             print("  Metadata report: ALL")
         else:
             print("  Metadata report:  %s" % map_name)
-        
 
         if not target_maps:
             if map_name is None:

@@ -9,6 +9,7 @@ import yaml
 
 LOGGER = logging.getLogger(__name__)
 
+
 # --- General helpers for YAML files ---
 def get_typed_value(value: str) -> float | int | str:
     """

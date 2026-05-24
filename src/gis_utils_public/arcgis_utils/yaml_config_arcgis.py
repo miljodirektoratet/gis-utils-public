@@ -61,11 +61,15 @@ def load_map_service_config(
     LOGGER.debug("Loading map service config: %s", conf_file)
     config = _normalize_config_values(read_yml_config(conf_file))
     config_map = config.get("map", {}) if isinstance(config, dict) else {}
-    config_layers = [
-        (name, cfg)
-        for name, cfg in config.items()
-        if name != "map" and isinstance(cfg, dict)
-    ] if isinstance(config, dict) else []
+    config_layers = (
+        [
+            (name, cfg)
+            for name, cfg in config.items()
+            if name != "map" and isinstance(cfg, dict)
+        ]
+        if isinstance(config, dict)
+        else []
+    )
     return config, config_map, config_layers
 
 
@@ -126,11 +130,15 @@ def validate_lyr_source_sde_paths(
         ) from exc
 
     if layers_dict is None:
-        layers_dict = [
-            (name, cfg)
-            for name, cfg in config.items()
-            if name != "map" and isinstance(cfg, dict)
-        ] if isinstance(config, dict) else []
+        layers_dict = (
+            [
+                (name, cfg)
+                for name, cfg in config.items()
+                if name != "map" and isinstance(cfg, dict)
+            ]
+            if isinstance(config, dict)
+            else []
+        )
 
     if sde_path is None and isinstance(config, dict):
         map_cfg = config.get("map", {}) if isinstance(config.get("map"), dict) else {}
@@ -139,9 +147,13 @@ def validate_lyr_source_sde_paths(
     report = []
     for layer_name, layer_cfg in layers_dict:
         feature_dataset, dataset = (
-            layer_cfg.get("source", {}).get("feature_dataset"),
-            layer_cfg.get("source", {}).get("dataset"),
-        ) if isinstance(layer_cfg.get("source"), dict) else (None, None)
+            (
+                layer_cfg.get("source", {}).get("feature_dataset"),
+                layer_cfg.get("source", {}).get("dataset"),
+            )
+            if isinstance(layer_cfg.get("source"), dict)
+            else (None, None)
+        )
 
         print(f"\nLayer: {layer_name}")
         print(f"  sde_connection: {sde_path}")
@@ -174,20 +186,23 @@ def validate_lyr_source_sde_paths(
         exists_via_fd = bool(arcpy.Exists(ds_path_via_fd))
         exists_direct = bool(arcpy.Exists(ds_path_direct))
 
-        print(f"  [{'OK' if exists_via_fd else 'MISSING'}] dataset via feature_dataset: {ds_path_via_fd}")
-        print(f"  [{'OK' if exists_direct else 'MISSING'}] dataset direct: {ds_path_direct}")
+        print(
+            f"  [{'OK' if exists_via_fd else 'MISSING'}] dataset via feature_dataset: {ds_path_via_fd}"
+        )
+        print(
+            f"  [{'OK' if exists_direct else 'MISSING'}] dataset direct: {ds_path_direct}"
+        )
 
-        report.append({
-            "layer": layer_name,
-            "ok": exists_via_fd or exists_direct,
-            "sde_connection": sde_path,
-            "dataset_via_feature_dataset": ds_path_via_fd,
-            "dataset_direct": ds_path_direct,
-            "exists_via_feature_dataset": exists_via_fd,
-            "exists_direct": exists_direct,
-        })
+        report.append(
+            {
+                "layer": layer_name,
+                "ok": exists_via_fd or exists_direct,
+                "sde_connection": sde_path,
+                "dataset_via_feature_dataset": ds_path_via_fd,
+                "dataset_direct": ds_path_direct,
+                "exists_via_feature_dataset": exists_via_fd,
+                "exists_direct": exists_direct,
+            }
+        )
 
     return report
-
-
-

@@ -17,34 +17,34 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-	# Helps code editors (vscode etc.) recognize available modules
-	# without loading ArcGIS code.
-		from . import (
-				agol_user_admin,
-				arcgis_checks,
-				arcgispro_layer_utils,
-				arcgispro_map_utils,
-				yaml_config_arcgis,
-				# module_1,  # Example for adding a new module
-		)
+    # Helps code editors (vscode etc.) recognize available modules
+    # without loading ArcGIS code.
+    from . import (
+        agol_user_admin,
+        arcgis_checks,
+        arcgispro_layer_utils,
+        arcgispro_map_utils,
+        yaml_config_arcgis,
+        # module_1,  # Example for adding a new module
+    )
 
 __all__ = [
-		"agol_user_admin",
-		"yaml_config_arcgis",
-		"arcgis_checks",
-		"arcgispro_map_utils",
-		"arcgispro_layer_utils",
-		# "module_1",
-	]
+    "agol_user_admin",
+    "yaml_config_arcgis",
+    "arcgis_checks",
+    "arcgispro_map_utils",
+    "arcgispro_layer_utils",
+    # "module_1",
+]
 
 
 def __getattr__(name: str) -> Any:
-		"""Lazily load ArcGIS-dependent modules on first attribute access.
+    """Lazily load ArcGIS-dependent modules on first attribute access.
 
-		:param name: Requested attribute name.
-		:return: Imported module object.
-		:raises AttributeError: If attribute is not part of this package API.
-		"""
-		if name in __all__:
-				return import_module(f"{__name__}.{name}")
-		raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    :param name: Requested attribute name.
+    :return: Imported module object.
+    :raises AttributeError: If attribute is not part of this package API.
+    """
+    if name in __all__:
+        return import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
