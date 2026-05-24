@@ -28,7 +28,7 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
         del test_aprx
 
         if is_locked:
-            LOGGER.info("Project is locked or read-only.")
+            LOGGER.error("Project is locked or read-only.")
             while True:
                 response = (
                     input("  wait and retry / stop? [wait/stop]: ").lower().strip()
@@ -38,10 +38,12 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
                     time.sleep(30)
                     return check_arcgispro_project_is_closed(aprx_path)  # Retry
                 elif response == "stop":
-                    LOGGER.info("  Stopping pipeline.")
+                    LOGGER.error("  Stopping pipeline.")
                     return False
                 else:
                     LOGGER.info("  Invalid response. Enter 'wait' or 'stop'.")
+        
+        LOGGER.info("Project is accessible and writable check passed (isReadOnly=False).")
         return True
     except Exception as e:
         LOGGER.error("Error accessing project: %s", e)

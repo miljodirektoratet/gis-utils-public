@@ -58,7 +58,7 @@ def load_map_service_config(
         full YAML dict, ``config_map`` is ``config["map"]`` (or ``{}``), and
         ``config_layers`` is a list of ``(layer_name, layer_cfg)`` tuples.
     """
-    LOGGER.debug("Loading map service config: %s", conf_file)
+    LOGGER.info("Loading map service config YAML: %s", conf_file)
     config = _normalize_config_values(read_yml_config(conf_file))
     config_map = config.get("map", {}) if isinstance(config, dict) else {}
     config_layers = (
@@ -122,7 +122,7 @@ def validate_lyr_source_sde_paths(
     :param emit: Optional output callback. Defaults to ``print``.
     :return: Validation report list per layer.
     """
-    LOGGER.debug("Validating layer source SDE paths")
+    LOGGER.info("Validating layer source SDE paths")
     out_msg = emit if callable(emit) else print
     try:
         import arcpy

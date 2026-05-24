@@ -18,7 +18,7 @@ def set_map_metadata_from_config(
     try:
         md = map_obj.metadata
     except Exception as exc:
-        LOGGER.warning("  -> Metadata is not accessible in this environment: %s", exc)
+        LOGGER.warning("Metadata is not accessible in this environment: %s", exc)
         return
 
     try:
@@ -38,9 +38,9 @@ def set_map_metadata_from_config(
         if map_metadata_cfg.get("license"):
             md.accessConstraints = map_metadata_cfg.get("license")
         map_obj.metadata = md
-        LOGGER.info("  -> Map metadata updated from config.")
+        LOGGER.info("-> Map metadata updated from config.")
     except Exception as exc:
-        LOGGER.error("  -> Failed to set metadata: %s", exc)
+        LOGGER.error("-> Failed to set metadata: %s", exc)
 
 
 def enable_unique_numeric_ids(map_obj: Any) -> bool:
@@ -54,7 +54,7 @@ def enable_unique_numeric_ids(map_obj: Any) -> bool:
         if hasattr(map_cim, "useServiceLayerIDs"):
             map_cim.useServiceLayerIDs = True
             map_obj.setDefinition(map_cim)
-            LOGGER.info("Unique numeric IDs enabled via 'useServiceLayerIDs'.")
+            LOGGER.info("-> Unique numeric IDs enabled via 'useServiceLayerIDs'.")
             return True
 
         for attr in [
@@ -66,10 +66,10 @@ def enable_unique_numeric_ids(map_obj: Any) -> bool:
             if hasattr(map_cim, attr):
                 setattr(map_cim, attr, True)
                 map_obj.setDefinition(map_cim)
-                LOGGER.info("Unique numeric IDs enabled via CIM attribute '%s'.", attr)
+                LOGGER.info("-> Unique numeric IDs enabled via CIM attribute '%s'.", attr)
                 return True
 
         return False
     except Exception as exc:
-        LOGGER.error("Error enabling unique numeric IDs: %s", exc)
+        LOGGER.error("-> Failed to enable unique numeric IDs: %s", exc)
         return False
