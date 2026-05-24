@@ -5,7 +5,7 @@ import os
 import re
 from typing import IO, Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +23,8 @@ def get_typed_value(value: str) -> float | int | str:
     :param value: yamlvalue
     :return: yaml value as a native Python data type (str, int, float)
     """
+
+    value2: float | int | str
 
     try:
         if "." in value:

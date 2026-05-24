@@ -3,7 +3,7 @@
 import re
 import sys
 
-from arcgis.gis import GIS
+from arcgis.gis import GIS  # type: ignore[import-untyped]
 
 
 def agol_add_users_to_group(
