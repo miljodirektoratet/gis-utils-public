@@ -2,15 +2,17 @@
 - ArcGIS Map Service Definition: <data-product>_map_service_definition.yml
 - ..
 """
+
 import logging
 import os
+from typing import Any
 
 from ..yaml_config import read_yml_config
 
 LOGGER = logging.getLogger(__name__)
 
 
-def _normalize_config_values(value):
+def _normalize_config_values(value: Any) -> Any:
     """Normalize YAML values recursively.
 
     Trims string values and converts null-like tokens to ``None``.
@@ -25,7 +27,6 @@ def _normalize_config_values(value):
     if isinstance(value, list):
         return [_normalize_config_values(item) for item in value]
     if isinstance(value, str):
-        
         # Multiline strings: only trim trailing whitespace to preserve indentation
         if "\n" in value:
             cleaned = value.rstrip()
@@ -46,7 +47,10 @@ def _normalize_config_values(value):
         return cleaned
     return value
 
-def load_map_service_config(conf_file):
+
+def load_map_service_config(
+    conf_file: str | os.PathLike[str],
+) -> tuple[dict[str, Any], dict[str, Any], list[tuple[str, dict[str, Any]]]]:
     """Load and split map service configuration.
 
     :param conf_file: Path to the map service YAML file: ``data_product_map_service_definition.yml``.
@@ -65,7 +69,9 @@ def load_map_service_config(conf_file):
     return config, config_map, config_layers
 
 
-def resolve_sde_connection(sde_config, env="test"):
+def resolve_sde_connection(
+    sde_config: dict[str, str] | str | None, env: str = "test"
+) -> str | None:
     """Resolve an SDE connection path from config.
 
     :param sde_config: SDE config as env-keyed dict or direct path string.
@@ -98,7 +104,11 @@ def resolve_sde_connection(sde_config, env="test"):
 
 
 # --- Helpers for <data_product>_map_service_definition.yaml files ---
-def validate_lyr_source_sde_paths(config, sde_path=None, layers_dict=None):
+def validate_lyr_source_sde_paths(
+    config: dict[str, Any] | None,
+    sde_path: str | None = None,
+    layers_dict: list[tuple[str, dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     """Validate layer source dataset paths against SDE.
 
     :param config: Parsed map service configuration.
@@ -140,11 +150,23 @@ def validate_lyr_source_sde_paths(config, sde_path=None, layers_dict=None):
 
         if not sde_path:
             print("  [MISSING] No SDE connection resolved for this layer.")
-            report.append({"layer": layer_name, "ok": False, "reason": "missing_sde_connection"})
+            report.append(
+                {
+                    "layer": layer_name,
+                    "ok": False,
+                    "reason": "missing_sde_connection",
+                }
+            )
             continue
         if not feature_dataset or not dataset:
             print("  [MISSING] source.feature_dataset and/or source.dataset.")
-            report.append({"layer": layer_name, "ok": False, "reason": "missing_dataset_config"})
+            report.append(
+                {
+                    "layer": layer_name,
+                    "ok": False,
+                    "reason": "missing_dataset_config",
+                }
+            )
             continue
 
         ds_path_via_fd = os.path.join(sde_path, feature_dataset, dataset)

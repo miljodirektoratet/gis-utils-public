@@ -1,18 +1,23 @@
-import time
-import arcpy
+"""ArcGIS Pro runtime and project access checks."""
+
 import logging
+import time
+from typing import Any
+
+import arcpy
 
 LOGGER = logging.getLogger(__name__)
 
 # --- Shared helpers ---
 
 # --- Helpers for checking ArcGIS Runtime env and project/layer access ---
-def check_arcgispro_project_is_closed(aprx_path):
+def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
     """
     Check if the ArcGIS project is accessible and not locked by ArcGIS Pro.
     
     Tries to open the project; if locked/read-only, prompts user to wait or stop.
     
+    :param aprx_path: Path to ArcGIS Pro project file (.aprx).
     :return: True if project is accessible, False if user chose to stop.
     """
     try:
@@ -39,13 +44,15 @@ def check_arcgispro_project_is_closed(aprx_path):
         return False
 
 
-def report_project_metadata(aprx, map_name=None, label="Project metadata"):
+def report_project_metadata(
+    aprx: Any, map_name: str | None = None, label: str = "Project metadata"
+) -> None:
     """Report project metadata for one map or all maps.
 
     :param aprx: ArcGISProject object or APRX file path.
     :param map_name: Optional map name filter. If None, all maps are reported.
     :param label: Header label for the metadata report.
-    :return: None
+    :return: None.
     """
     created_local_project = False
 

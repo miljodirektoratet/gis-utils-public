@@ -55,9 +55,9 @@ from . import arcgis_utils
 
 # Package version
 try:
-	__version__ = version("gis-utils-public")
+  __version__ = version("gis-utils-public")
 except PackageNotFoundError:
-	__version__ = "unknown"
+  __version__ = "unknown"
 
 # Public API
 __all__ = ["main", "read_yml_config", "arcgis_utils", "__version__"]

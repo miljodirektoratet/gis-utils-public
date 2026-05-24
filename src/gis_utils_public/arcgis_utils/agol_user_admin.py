@@ -1,14 +1,17 @@
+"""AGOL group administration helpers."""
+
 import re
 import sys
 
 from arcgis.gis import GIS
+
 
 def agol_add_users_to_group(
     gis: GIS,
     oidc_brukere: list[str],
     arcgis_brukere: list[str],
     gruppe_navn: str,
-    dry_run=True,
+    dry_run: bool = True,
     batch_size: int = 10,
 ) -> None:
     """
@@ -17,8 +20,9 @@ def agol_add_users_to_group(
     :param oidc_brukere:              Liste med e-post adresser som skal legges til
     :param arcgis_brukere:            Liste med brukernavn som skal legges til 
     :param gruppe_navn:               Navn på AGOL gruppe
-    :param dry_run:                   Må settes til False for å gjøre endringer - default er False
+    :param dry_run:                   Må settes til False for å gjøre endringer.
     :param batch_size:                Antall brukere per remove_users/add_users-kall
+    :return: None.
     """
 
     print(f">>> AGOL organisasjon:            {gis.properties.urlKey}\n"

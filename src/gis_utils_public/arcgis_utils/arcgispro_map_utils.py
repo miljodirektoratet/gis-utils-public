@@ -1,15 +1,20 @@
-"""Module for ArcGIS Pro map-related actions:
-- set_map_metadata_from_config: Apply map metadata values when metadata editing is available.
-"""
-import logging
-import os
+"""ArcGIS Pro map-related helper functions."""
 
-from ..config import read_yml_config
+import logging
+from typing import Any, Mapping
 
 LOGGER = logging.getLogger(__name__)
 
-def set_map_metadata_from_config(map_obj, map_metadata_cfg):
-    """Apply map metadata values when metadata editing is available."""
+
+def set_map_metadata_from_config(
+    map_obj: Any, map_metadata_cfg: Mapping[str, Any]
+) -> None:
+    """Apply map metadata values when metadata editing is available.
+
+    :param map_obj: ArcGIS Pro map object with a ``metadata`` property.
+    :param map_metadata_cfg: Metadata values from configuration.
+    :return: None.
+    """
     try:
         md = map_obj.metadata
     except Exception as exc:
@@ -37,8 +42,13 @@ def set_map_metadata_from_config(map_obj, map_metadata_cfg):
     except Exception as exc:
         print(f"  -> Failed to set metadata: {exc}")
 
-def enable_unique_numeric_ids(map_obj):
-    """Enable map-level service layer IDs for publishing when supported."""
+
+def enable_unique_numeric_ids(map_obj: Any) -> bool:
+    """Enable map-level service layer IDs for publishing when supported.
+
+    :param map_obj: ArcGIS Pro map object.
+    :return: ``True`` if setting was applied, otherwise ``False``.
+    """
     try:
         map_cim = map_obj.getDefinition("V3")
         if hasattr(map_cim, "useServiceLayerIDs"):
@@ -58,6 +68,6 @@ def enable_unique_numeric_ids(map_obj):
                 return True
 
         return False
-    except Exception as ex:
-        print(f"Error enabling unique numeric IDs: {ex}")
+    except Exception as e:
+        print(f"Error enabling unique numeric IDs: {e}")
         return False

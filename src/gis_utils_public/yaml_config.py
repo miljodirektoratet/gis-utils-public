@@ -1,9 +1,10 @@
-"""Configuration helpers for the YAML config files"""
+"""Configuration helpers for YAML configuration files."""
 
+import logging
 import os
 import re
-import logging
-from typing import IO, Any, Literal, Mapping
+from typing import IO, Any
+
 import yaml
 
 LOGGER = logging.getLogger(__name__)
@@ -11,7 +12,7 @@ LOGGER = logging.getLogger(__name__)
 # --- General helpers for YAML files ---
 def get_typed_value(value: str) -> float | int | str:
     """
-    YAML loader natively loads all values as strings. This functions maps values to
+    YAML loader natively loads all values as strings. This function maps values to
     native python data types (int, float, str).
     - If value contains a dot (.) --> map to float.
     - If value starts with a 0 and is longer than 1 char --> keep as string.
