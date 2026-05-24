@@ -53,7 +53,7 @@ def report_project_metadata(
     map_name: str | None = None,
     label: str = "Project metadata",
     emit: Callable[[str], None] | None = None,
-    include_timestamp: bool = False,
+    include_timestamp: bool = True,
     timestamp_format: str = "%d.%m.%Y %H:%M:%S",
 ) -> None:
     """Report project metadata for one map or all maps.
