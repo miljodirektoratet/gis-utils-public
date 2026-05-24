@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 import arcpy
 
@@ -48,16 +48,21 @@ def check_arcgispro_project_is_closed(aprx_path: str) -> bool:
 
 
 def report_project_metadata(
-    aprx: Any, map_name: str | None = None, label: str = "Project metadata"
+    aprx: Any,
+    map_name: str | None = None,
+    label: str = "Project metadata",
+    emit: Callable[[str], None] | None = None,
 ) -> None:
     """Report project metadata for one map or all maps.
 
     :param aprx: ArcGISProject object or APRX file path.
     :param map_name: Optional map name filter. If None, all maps are reported.
     :param label: Header label for the metadata report.
+    :param emit: Optional output function. Defaults to ``print``.
     :return: None.
     """
     created_local_project = False
+    out = emit if callable(emit) else print
 
     if isinstance(aprx, str):
         aprx = arcpy.mp.ArcGISProject(aprx)
@@ -68,30 +73,30 @@ def report_project_metadata(
         raise ValueError("map_name must be None or a non-empty string")
 
     try:
-        print("\n--- [%s] ---" % label)
-        print("  path: %s" % aprx.filePath)
-        print("  is_read_only: %s" % aprx.isReadOnly)
-        print("  map_count: %s" % len(aprx.listMaps()))
+        out("\n--- [%s] ---" % label)
+        out("  path: %s" % aprx.filePath)
+        out("  is_read_only: %s" % aprx.isReadOnly)
+        out("  map_count: %s" % len(aprx.listMaps()))
         if map_name is None:
             target_maps = aprx.listMaps()
         else:
             target_maps = aprx.listMaps(map_name)
 
         if map_name is None:
-            print("  Metadata report: ALL")
+            out("  Metadata report: ALL")
         else:
-            print("  Metadata report:  %s" % map_name)
+            out("  Metadata report:  %s" % map_name)
 
         if not target_maps:
             if map_name is None:
-                print("  -> No maps found in project.")
+                out("  -> No maps found in project.")
             else:
-                print("  -> No map found with this name.")
+                out("  -> No map found with this name.")
             return
 
         for m in target_maps:
-            print("  MAP: %s" % m.name)
-            print("    layer_count: %s" % len(m.listLayers()))
+            out("  MAP: %s" % m.name)
+            out("    layer_count: %s" % len(m.listLayers()))
 
             for lyr in m.listLayers():
                 if lyr.isGroupLayer or lyr.isBasemapLayer:
@@ -100,10 +105,10 @@ def report_project_metadata(
                 try:
                     fields = arcpy.ListFields(lyr)
                     col_count = len(fields) if fields else 0
-                    print("      [-]: %s [fields: %s]" % (lyr.name, col_count))
+                    out("      [-]: %s [fields: %s]" % (lyr.name, col_count))
                 except Exception:
-                    print("      [-]: %s [fields: N/A]" % lyr.name)
+                    out("      [-]: %s [fields: N/A]" % lyr.name)
     finally:
-        print("-" * 50)
+        out("-" * 50)
         if created_local_project:
             del aprx
