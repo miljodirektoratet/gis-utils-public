@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime
 from typing import Any, Callable
 
 import arcpy
@@ -52,6 +53,8 @@ def report_project_metadata(
     map_name: str | None = None,
     label: str = "Project metadata",
     emit: Callable[[str], None] | None = None,
+    include_timestamp: bool = False,
+    timestamp_format: str = "%d.%m.%Y %H:%M:%S",
 ) -> None:
     """Report project metadata for one map or all maps.
 
@@ -59,6 +62,8 @@ def report_project_metadata(
     :param map_name: Optional map name filter. If None, all maps are reported.
     :param label: Header label for the metadata report.
     :param emit: Optional output function. Defaults to ``print``.
+    :param include_timestamp: Whether to append timestamp to report header label.
+    :param timestamp_format: Datetime format used when ``include_timestamp`` is True.
     :return: None.
     """
     created_local_project = False
@@ -72,8 +77,13 @@ def report_project_metadata(
     if map_name is not None and (not isinstance(map_name, str) or not map_name.strip()):
         raise ValueError("map_name must be None or a non-empty string")
 
+    header_label = label
+    if include_timestamp:
+        timestamp = datetime.now().strftime(timestamp_format)
+        header_label = f"{label} ({timestamp})"
+
     try:
-        out_msg("\n--- [%s] ---" % label)
+        out_msg("\n--- [%s] ---" % header_label)
         out_msg("  path: %s" % aprx.filePath)
         out_msg("  is_read_only: %s" % aprx.isReadOnly)
         out_msg("  map_count: %s" % len(aprx.listMaps()))
