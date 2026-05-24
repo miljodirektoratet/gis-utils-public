@@ -2,7 +2,8 @@
 
 Public functions:
 - load_map_service_config: Load and split map/layer sections from YAML.
-- resolve_sde_connection: Resolve SDE path from env-keyed or direct config.
+- resolve_sde_connection_value: Resolve SDE path from env-keyed or direct config.
+- resolve_layer_sde_connection_path: Resolve layer/map SDE path with fallback.
 - validate_lyr_source_sde_paths: Validate configured datasets against SDE paths.
 """
 
@@ -76,7 +77,7 @@ def load_map_service_config(
     return config, config_map, config_layers
 
 
-def resolve_sde_connection(
+def resolve_sde_connection_value(
     sde_config: dict[str, str] | str | None, env: str = "test"
 ) -> str | None:
     """Resolve an SDE connection path from config.
@@ -87,13 +88,13 @@ def resolve_sde_connection(
 
     Example::
 
-        resolve_sde_connection(
+        resolve_sde_connection_value(
             {"test": r"C:/connections/test.sde", "prod": r"C:/connections/prod.sde"},
             env="test",
         )
         # output: "C:/connections/test.sde"
 
-        resolve_sde_connection(r"C:/connections/shared.sde")
+        resolve_sde_connection_value(r"C:/connections/shared.sde")
         # output: "C:/connections/shared.sde"
     """
     LOGGER.debug("Resolving SDE connection for env: %s", env)
@@ -108,6 +109,55 @@ def resolve_sde_connection(
     if isinstance(sde_config, str) and sde_config.strip():
         return sde_config.strip()
     return None
+
+
+def resolve_layer_sde_connection_path(
+    service_def_config: dict[str, Any],
+    layer_config: dict[str, Any] | None = None,
+    env: str = "test",
+    fallback_path: str | None = None,
+) -> str:
+    """Resolve SDE connection path from layer/map config with fallback.
+
+    Priority:
+    1) ``layer_config.source.sde_connection`` (string)
+    2) ``service_def_config.map.sde_connection[env]`` (dict) or string
+    3) ``fallback_path``
+
+    :param service_def_config: Full map service definition config dictionary.
+    :param layer_config: Per-layer config dictionary.
+    :param env: Environment key used for map-level dict config.
+    :param fallback_path: Optional fallback SDE path.
+    :return: Resolved SDE connection path.
+    :raises ValueError: If no valid SDE path can be resolved.
+    """
+    layer_source = (
+        (layer_config or {}).get("source", {})
+        if isinstance(layer_config, dict)
+        else {}
+    )
+    map_cfg = (
+        (service_def_config or {}).get("map", {})
+        if isinstance(service_def_config, dict)
+        else {}
+    )
+
+    layer_sde = layer_source.get("sde_connection")
+    if isinstance(layer_sde, str) and layer_sde.strip():
+        return layer_sde.strip()
+
+    map_sde = map_cfg.get("sde_connection")
+    resolved_map_sde = resolve_sde_connection_value(sde_config=map_sde, env=env)
+    if isinstance(resolved_map_sde, str) and resolved_map_sde.strip():
+        return resolved_map_sde.strip()
+
+    if isinstance(fallback_path, str) and fallback_path.strip():
+        return fallback_path.strip()
+
+    raise ValueError(
+        "No SDE connection path found. Set source.sde_connection in layer config, "
+        "or map.sde_connection for selected env, or provide fallback_path."
+    )
 
 
 # --- Helpers for <data_product>_map_service_definition.yaml files ---
@@ -148,7 +198,7 @@ def validate_lyr_source_sde_paths(
 
     if sde_path is None and isinstance(config, dict):
         map_cfg = config.get("map", {}) if isinstance(config.get("map"), dict) else {}
-        sde_path = resolve_sde_connection(map_cfg.get("sde_connection"))
+        sde_path = resolve_sde_connection_value(map_cfg.get("sde_connection"))
 
     report = []
     for layer_name, layer_cfg in layers_dict:
