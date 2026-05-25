@@ -2,6 +2,7 @@
 
 Public functions:
 - load_map_service_config: Load and split map/layer sections from YAML.
+- iter_map_service_layer_entries: Return ordered YAML layer entries.
 - resolve_sde_connection_value: Resolve SDE path from env-keyed or direct config.
 - resolve_layer_sde_connection_path: Resolve layer/map SDE path with fallback.
 - validate_lyr_source_sde_paths: Validate configured datasets against SDE paths.
@@ -52,6 +53,24 @@ def _normalize_config_values(value: Any) -> Any:
     return value
 
 
+def iter_map_service_layer_entries(
+    config: dict[str, Any] | None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return ordered map-service layer entries excluding top-level map config.
+
+    :param config: Parsed map service configuration dictionary.
+    :return: Ordered list of ``(layer_name, layer_cfg)`` tuples.
+    """
+    if not isinstance(config, dict):
+        return []
+
+    return [
+        (name, cfg)
+        for name, cfg in config.items()
+        if name != "map" and isinstance(cfg, dict)
+    ]
+
+
 def load_map_service_config(
     conf_file: str | os.PathLike[str],
 ) -> tuple[dict[str, Any], dict[str, Any], list[tuple[str, dict[str, Any]]]]:
@@ -65,15 +84,7 @@ def load_map_service_config(
     LOGGER.info("Loading map service config YAML: %s", conf_file)
     config = _normalize_config_values(read_yml_config(conf_file))
     config_map = config.get("map", {}) if isinstance(config, dict) else {}
-    config_layers = (
-        [
-            (name, cfg)
-            for name, cfg in config.items()
-            if name != "map" and isinstance(cfg, dict)
-        ]
-        if isinstance(config, dict)
-        else []
-    )
+    config_layers = iter_map_service_layer_entries(config)
     return config, config_map, config_layers
 
 
@@ -186,15 +197,7 @@ def validate_lyr_source_sde_paths(
         ) from exc
 
     if layers_dict is None:
-        layers_dict = (
-            [
-                (name, cfg)
-                for name, cfg in config.items()
-                if name != "map" and isinstance(cfg, dict)
-            ]
-            if isinstance(config, dict)
-            else []
-        )
+        layers_dict = iter_map_service_layer_entries(config)
 
     if sde_path is None and isinstance(config, dict):
         map_cfg = config.get("map", {}) if isinstance(config.get("map"), dict) else {}
