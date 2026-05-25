@@ -35,8 +35,24 @@ def _create_add_layer_from_sde_result(
 		"dataset_path": None,
 		"tried_paths": [],
 		"added": False,
+		"skipped": False,
 		"error": None,
 	}
+
+
+# Get existing layer names once so reruns do not add duplicates.
+def _get_existing_map_layer_names(map_obj: Any) -> set[str]:
+	"""Return case-insensitive set of existing layer names in map.
+
+	:param map_obj: ArcGIS Pro map object.
+	:return: Set of existing layer names normalized with ``casefold()``.
+	"""
+	existing_names: set[str] = set()
+	for layer in map_obj.listLayers():
+		layer_name = getattr(layer, "name", None)
+		if isinstance(layer_name, str) and layer_name.strip():
+			existing_names.add(layer_name.strip().casefold())
+	return existing_names
 
 
 # Use one result format for LYRX path checks.
@@ -185,10 +201,22 @@ def add_layers_from_config_sde_to_map(
 	"""
 	layer_entries = iter_map_service_layer_entries(service_def_config)
 	results: list[dict[str, Any]] = []
+	existing_layer_names = _get_existing_map_layer_names(map_obj)
 
 	LOGGER.info("Add layers from SDE in config order")
 
 	for layer_name, layer_config in layer_entries:
+		normalized_layer_name = layer_name.strip().casefold()
+		if normalized_layer_name in existing_layer_names:
+			layer_result = _create_add_layer_from_sde_result(
+				layer_name=layer_name,
+				sde_connection_path=None,
+			)
+			layer_result["skipped"] = True
+			LOGGER.info("-> Skip adding layer '%s': layer already exists in map", layer_name)
+			results.append(layer_result)
+			continue
+
 		LOGGER.info("-> Add layer from SDE source: %s", layer_name)
 		try:
 			sde_connection_path = resolve_layer_sde_connection_path(
@@ -217,18 +245,28 @@ def add_layers_from_config_sde_to_map(
 			layer_config=layer_config,
 		)
 		if layer_result.get("added"):
+			existing_layer_names.add(normalized_layer_name)
 			LOGGER.info("-> Added layer '%s' from %s", layer_name, layer_result.get("dataset_path"))
+		elif layer_result.get("skipped"):
+			LOGGER.info("-> Skipped layer '%s'", layer_name)
 		else:
 			LOGGER.warning("-> Failed adding layer '%s': %s", layer_name, layer_result.get("error"))
 		results.append(layer_result)
 
 	added_count = sum(1 for result in results if bool(result.get("added")))
-	LOGGER.info("-> Added %d/%d layer(s) to map", added_count, len(layer_entries))
+	skipped_count = sum(1 for result in results if bool(result.get("skipped")))
+	LOGGER.info(
+		"-> Added %d/%d layer(s) to map (skipped existing: %d)",
+		added_count,
+		len(layer_entries),
+		skipped_count,
+	)
 
 	return {
 		"layer_results": results,
 		"layer_total": len(layer_entries),
 		"layers_added_count": added_count,
+		"layers_skipped_count": skipped_count,
 	}
 
 
