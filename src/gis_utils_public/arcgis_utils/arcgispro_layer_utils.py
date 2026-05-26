@@ -1047,6 +1047,69 @@ def check_and_update_item_visibility(
 		return None, False, f"Could not set visibility: {exc}"
 
 
+def check_and_update_definition_query(
+	item: Any,
+	expected_query: Any,
+) -> tuple[Any, bool, str]:
+	"""Check map item definition query and update when needed.
+
+	Supports feature layers and standalone tables. Uses direct
+	``definitionQuery`` property when available, then falls back to CIM
+	``definitionExpression`` when possible.
+
+	:param item: ArcGIS map item object (layer or table).
+	:param expected_query: Configured SQL where-clause string.
+	:return: Tuple ``(is_correct, was_updated, info_message)``.
+	"""
+	item_name = getattr(item, "name", "<unknown>")
+	if expected_query is None:
+		LOGGER.debug("check_and_update_definition_query: skip '%s' (no definition_query configured)", item_name)
+		return None, False, "No definition_query configured"
+
+	if not isinstance(expected_query, str):
+		LOGGER.debug("check_and_update_definition_query: skip '%s' (invalid definition_query)", item_name)
+		return None, False, "Configured definition_query must be a string"
+
+	desired_query = expected_query.strip()
+
+	# Preferred path: direct ArcPy property.
+	if hasattr(item, "definitionQuery"):
+		try:
+			current_query_raw = getattr(item, "definitionQuery", "")
+			current_query = current_query_raw.strip() if isinstance(current_query_raw, str) else ""
+			if current_query == desired_query:
+				return True, False, current_query
+			setattr(item, "definitionQuery", desired_query)
+			return False, True, desired_query
+		except Exception as exc:
+			LOGGER.debug(
+				"check_and_update_definition_query: direct property failed for '%s': %s",
+				item_name,
+				exc,
+			)
+
+	# Fallback: CIM attribute update.
+	try:
+		item_cim = item.getDefinition("V3")
+		for attr_name in ("definitionExpression", "definitionQuery"):
+			if not hasattr(item_cim, attr_name):
+				continue
+
+			current_query_raw = getattr(item_cim, attr_name, "")
+			current_query = current_query_raw.strip() if isinstance(current_query_raw, str) else ""
+			if current_query == desired_query:
+				return True, False, current_query
+
+			setattr(item_cim, attr_name, desired_query)
+			item.setDefinition(item_cim)
+			return False, True, desired_query
+
+		return None, False, "Definition query property is not available for this item"
+	except Exception as exc:
+		LOGGER.warning("check_and_update_definition_query: failed for '%s': %s", item_name, exc)
+		return None, False, f"Could not set definition query: {exc}"
+
+
 def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
 	"""Check service layer id and update when needed.
 
