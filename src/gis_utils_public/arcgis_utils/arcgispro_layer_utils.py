@@ -732,10 +732,30 @@ def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple
 	:param set_visible: Whether each new field should be visible.
 	:return: Tuple ``(initialized, field_count, creation_path)``.
 	"""
-	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
+	# Use arcpy.da.Describe to read the complete physical schema, bypassing CIM
+	# visibility state. arcpy.ListFields(layer) can return only CIM-visible
+	# fields when fieldDescriptions are already saved, causing the re-init to
+	# produce fewer entries than the actual dataset on subsequent runs.
 	layer_name = getattr(layer, "name", "<unknown>")
+	try:
+		import arcpy as _arcpy_for_describe
+		_describe = _arcpy_for_describe.da.Describe(layer.dataSource)
+		fields = _describe.get("fields") if isinstance(_describe, dict) else None
+	except Exception:
+		fields = None
+
+	if not fields:
+		# Fallback to _get_layer_fields_and_descriptions
+		fields, _, _ = _get_layer_fields_and_descriptions(layer)
+
+	_, cim, _ = _get_layer_fields_and_descriptions(layer)
+
 	if fields is None:
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
+		return False, 0, "none"
+
+	if cim is None:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM definition)", layer_name)
 		return False, 0, "none"
 
 	feature_table = getattr(cim, "featureTable", None)
