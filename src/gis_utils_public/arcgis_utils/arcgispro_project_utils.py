@@ -112,8 +112,15 @@ def _format_total_fields_for_table(table_obj: Any) -> str:
     :param table_obj: ArcGIS standalone table object.
     :return: Field count string as ``<visible>/<total>`` or ``N/A``.
     """
+    source_candidate = getattr(table_obj, "dataSource", None)
+    if not isinstance(source_candidate, str) or not source_candidate.strip():
+        source_candidate = getattr(table_obj, "catalogPath", None)
+
     try:
-        describe_result = arcpy.da.Describe(table_obj.dataSource)
+        if source_candidate is not None:
+            describe_result = arcpy.da.Describe(source_candidate)
+        else:
+            describe_result = arcpy.da.Describe(table_obj)
         physical_fields = (
             describe_result.get("fields") if isinstance(describe_result, dict) else None
         )
@@ -121,7 +128,10 @@ def _format_total_fields_for_table(table_obj: Any) -> str:
         return "%s/%s" % (total_fields, total_fields)
     except Exception:
         try:
-            fields = arcpy.ListFields(table_obj)
+            if source_candidate is not None:
+                fields = arcpy.ListFields(source_candidate)
+            else:
+                fields = arcpy.ListFields(table_obj)
             total_fields = len(fields) if fields else 0
             return "%s/%s" % (total_fields, total_fields)
         except Exception:
