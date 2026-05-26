@@ -592,7 +592,11 @@ def apply_lyrx_to_map_layers_from_config(
 	all_lyrx_files = _iter_lyrx_file_paths(lyrx_dir, recurse_subfolders)
 	lyrx_lookup_index = _build_lyrx_lookup_index(all_lyrx_files)
 
-	for layer_name, _ in layer_entries:
+	for layer_name, layer_config in layer_entries:
+		if isinstance(layer_config, dict) and layer_config.get("type") == "table":
+			LOGGER.debug("-> Skip LYRX transfer for table '%s'", layer_name)
+			continue
+
 		target_layers = map_obj.listLayers(layer_name)
 		if not target_layers:
 			result = _create_apply_lyrx_to_layer_result(
