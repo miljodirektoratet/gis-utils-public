@@ -17,6 +17,117 @@ import arcpy
 LOGGER = logging.getLogger(__name__)
 
 
+def _extract_service_id(cim_obj: Any) -> int | None:
+    """Extract service id from CIM object when present.
+
+    :param cim_obj: CIM object from layer/table definition.
+    :return: Service id value or ``None`` if unavailable.
+    """
+    if cim_obj is None:
+        return None
+
+    candidate_attrs = (
+        "serviceLayerId",
+        "serviceLayerID",
+        "serviceTableId",
+        "serviceTableID",
+    )
+    for attr_name in candidate_attrs:
+        attr_value = getattr(cim_obj, attr_name, None)
+        if attr_value is None:
+            continue
+        try:
+            return int(attr_value)
+        except Exception:
+            continue
+    return None
+
+
+def _format_visible_total_fields_for_layer(layer_obj: Any) -> str:
+    """Return visible/total-layer and total-source field count for one feature layer.
+
+    :param layer_obj: ArcGIS layer object.
+    :return: Field count string as ``<visible>/<total_layer> (<total_source>)`` or ``N/A``.
+    """
+    source_total_fields: int | None = None
+    try:
+        describe_result = arcpy.da.Describe(layer_obj.dataSource)
+        physical_fields = (
+            describe_result.get("fields") if isinstance(describe_result, dict) else None
+        )
+        source_total_fields = len(physical_fields) if physical_fields else 0
+    except Exception:
+        source_total_fields = None
+
+    layer_total_fields: int | None = None
+    try:
+        layer_fields = arcpy.ListFields(layer_obj)
+        layer_total_fields = len(layer_fields) if layer_fields else 0
+    except Exception:
+        layer_total_fields = None
+
+    if layer_total_fields is None and source_total_fields is None:
+        return "N/A"
+
+    if layer_total_fields is None:
+        layer_total_fields = source_total_fields
+    if source_total_fields is None:
+        source_total_fields = layer_total_fields
+
+    try:
+        layer_cim = layer_obj.getDefinition("V3")
+        feature_table = getattr(layer_cim, "featureTable", None)
+        field_descriptions = (
+            getattr(feature_table, "fieldDescriptions", None)
+            if feature_table is not None
+            else None
+        )
+
+        if isinstance(field_descriptions, list) and field_descriptions:
+            visible_fields = 0
+            for field_description in field_descriptions:
+                if bool(getattr(field_description, "visible", True)):
+                    visible_fields += 1
+            return "%s/%s (%s)" % (
+                visible_fields,
+                layer_total_fields,
+                source_total_fields,
+            )
+    except Exception:
+        pass
+
+    return "%s/%s (%s)" % (
+        layer_total_fields,
+        layer_total_fields,
+        source_total_fields,
+    )
+
+
+def _format_total_fields_for_table(table_obj: Any) -> str:
+    """Return visible/total field count string for one standalone table.
+
+    Standalone tables do not use per-field visibility in this pipeline, so
+    visible count equals total count.
+
+    :param table_obj: ArcGIS standalone table object.
+    :return: Field count string as ``<visible>/<total>`` or ``N/A``.
+    """
+    try:
+        describe_result = arcpy.da.Describe(table_obj.dataSource)
+        physical_fields = (
+            describe_result.get("fields") if isinstance(describe_result, dict) else None
+        )
+        total_fields = len(physical_fields) if physical_fields else 0
+        return "%s/%s" % (total_fields, total_fields)
+    except Exception:
+        try:
+            fields = arcpy.ListFields(table_obj)
+            total_fields = len(fields) if fields else 0
+            return "%s/%s" % (total_fields, total_fields)
+        except Exception:
+            return "N/A"
+
+
 def _clear_arcgispro_workspace_cache() -> None:
     """Clear ArcGIS Pro workspace cache.
 
@@ -191,18 +302,46 @@ def report_arcgispro_project_metadata(
 
         for map_obj in target_maps:
             out_msg("  MAP: %s" % map_obj.name)
-            out_msg("    layer_count: %s" % len(map_obj.listLayers()))
+            map_layers = [
+                layer_obj
+                for layer_obj in map_obj.listLayers()
+                if not layer_obj.isGroupLayer and not layer_obj.isBasemapLayer
+            ]
+            map_tables = map_obj.listTables()
+            out_msg("    layer_count: %s" % len(map_layers))
 
-            for layer_obj in map_obj.listLayers():
-                if layer_obj.isGroupLayer or layer_obj.isBasemapLayer:
-                    continue
-
+            for layer_obj in map_layers:
+                service_id = "-"
                 try:
-                    fields = arcpy.ListFields(layer_obj)
-                    col_count = len(fields) if fields else 0
-                    out_msg("      [-]: %s [fields: %s]" % (layer_obj.name, col_count))
+                    layer_cim = layer_obj.getDefinition("V3")
+                    extracted = _extract_service_id(layer_cim)
+                    if extracted is not None:
+                        service_id = str(extracted)
                 except Exception:
-                    out_msg("      [-]: %s [fields: N/A]" % layer_obj.name)
+                    pass
+
+                fields_text = _format_visible_total_fields_for_layer(layer_obj)
+                out_msg(
+                    "      [%s]: %s [fields: %s]"
+                    % (service_id, layer_obj.name, fields_text)
+                )
+
+            out_msg("    table_count: %s" % len(map_tables))
+            for table_obj in map_tables:
+                service_id = "-"
+                try:
+                    table_cim = table_obj.getDefinition("V3")
+                    extracted = _extract_service_id(table_cim)
+                    if extracted is not None:
+                        service_id = str(extracted)
+                except Exception:
+                    pass
+
+                fields_text = _format_total_fields_for_table(table_obj)
+                out_msg(
+                    "      [%s]: %s [fields: %s]"
+                    % (service_id, table_obj.name, fields_text)
+                )
     finally:
         out_msg("-" * 50)
         if created_local_project:
