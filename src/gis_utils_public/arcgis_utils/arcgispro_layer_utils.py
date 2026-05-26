@@ -725,50 +725,92 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 	return lookup, None
 
 
-def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple[bool, int]:
+def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple[bool, int, str]:
 	"""Initialize layer CIM field descriptions from source fields.
 
 	:param layer: ArcGIS layer object.
 	:param set_visible: Whether each new field should be visible.
-	:return: Tuple ``(initialized, field_count)``.
+	:return: Tuple ``(initialized, field_count, creation_path)``.
 	"""
 	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
 	layer_name = getattr(layer, "name", "<unknown>")
 	if fields is None:
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
-		return False, 0
+		return False, 0, "none"
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no featureTable)", layer_name)
-		return False, 0
+		return False, 0, "none"
 
+	# Prefer arcpy.cim factory when available, then fall back to CIM builder.
+	try:
+		import arcpy
+	except Exception:
+		arcpy = None
+
+	cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
 	builder = getattr(cim, "_arc_object", None)
-	if builder is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM builder)", layer_name)
-		return False, 0
+	if cim_module is None and builder is None:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM factory or builder)", layer_name)
+		return False, 0, "none"
 
 	rebuilt_descriptions = []
+	used_factory = False
+	used_builder = False
 	for field in fields:
 		field_name = getattr(field, "name", None)
 		alias_name = getattr(field, "aliasName", None)
 		if not isinstance(field_name, str) or not field_name:
 			continue
 
-		fd = builder.createObject("CIMFieldDescription")
-		fd.fieldName = field_name
-		fd.alias = alias_name if isinstance(alias_name, str) else field_name
-		fd.visible = bool(set_visible)
+		fd = None
+		if cim_module is not None:
+			create_from_class_name = getattr(cim_module, "CreateCIMObjectFromClassName", None)
+			if callable(create_from_class_name):
+				try:
+					fd = create_from_class_name("CIMFieldDescription", "V3")
+					used_factory = True
+				except Exception as exc:
+					LOGGER.debug("ensure_cim_field_descriptions: CIM factory failed for '%s': %s", layer_name, exc)
+
+		if fd is None and builder is not None:
+			try:
+				fd = builder.createObject("CIMFieldDescription")
+				used_builder = True
+			except Exception as exc:
+				LOGGER.debug("ensure_cim_field_descriptions: CIM builder failed for '%s': %s", layer_name, exc)
+
+		if fd is None:
+			continue
+
+		setattr(fd, "fieldName", field_name)
+		setattr(fd, "alias", alias_name if isinstance(alias_name, str) else field_name)
+		setattr(fd, "visible", bool(set_visible))
 		rebuilt_descriptions.append(fd)
+
+	if not rebuilt_descriptions:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no field descriptions built)", layer_name)
+		return False, 0, "none"
+
+	if used_factory and used_builder:
+		creation_path = "mixed"
+	elif used_factory:
+		creation_path = "factory"
+	elif used_builder:
+		creation_path = "builder"
+	else:
+		creation_path = "none"
 
 	feature_table.fieldDescriptions = rebuilt_descriptions
 	layer.setDefinition(cim)
 	LOGGER.debug(
-		"ensure_cim_field_descriptions: updated '%s' (field_count=%s)",
+		"ensure_cim_field_descriptions: updated '%s' (field_count=%s, creation_path=%s)",
 		layer_name,
 		len(rebuilt_descriptions),
+		creation_path,
 	)
-	return True, len(rebuilt_descriptions)
+	return True, len(rebuilt_descriptions), creation_path
 
 
 def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | None:
