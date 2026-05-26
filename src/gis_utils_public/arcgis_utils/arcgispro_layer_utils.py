@@ -989,6 +989,64 @@ def set_only_fields_visible(
 	)
 
 
+def check_and_update_item_visibility(
+	item: Any,
+	expected_visible: Any,
+) -> tuple[Any, bool, str]:
+	"""Check map item visibility and update when needed.
+
+	Supports both feature layers and standalone tables. Uses direct ``visible``
+	property when available, then falls back to common CIM visibility attributes.
+
+	:param item: ArcGIS map item object (layer or table).
+	:param expected_visible: Configured visibility (typically bool).
+	:return: Tuple ``(is_correct, was_updated, info_message)``.
+	"""
+	item_name = getattr(item, "name", "<unknown>")
+	if expected_visible is None:
+		LOGGER.debug("check_and_update_item_visibility: skip '%s' (no visible configured)", item_name)
+		return None, False, "No visible configured"
+
+	if not isinstance(expected_visible, bool):
+		LOGGER.debug("check_and_update_item_visibility: skip '%s' (invalid visible value)", item_name)
+		return None, False, "Configured visible must be true/false"
+
+	# Preferred path: direct ArcPy property.
+	if hasattr(item, "visible"):
+		try:
+			current_visible = bool(getattr(item, "visible"))
+			if current_visible == expected_visible:
+				return True, False, f"visible={current_visible}"
+			setattr(item, "visible", expected_visible)
+			return False, True, f"visible={expected_visible}"
+		except Exception as exc:
+			LOGGER.debug(
+				"check_and_update_item_visibility: direct property failed for '%s': %s",
+				item_name,
+				exc,
+			)
+
+	# Fallback: CIM attribute update.
+	try:
+		item_cim = item.getDefinition("V3")
+		for attr_name in ("visibility", "visible", "isVisible"):
+			if not hasattr(item_cim, attr_name):
+				continue
+
+			current_visible = bool(getattr(item_cim, attr_name))
+			if current_visible == expected_visible:
+				return True, False, f"{attr_name}={current_visible}"
+
+			setattr(item_cim, attr_name, expected_visible)
+			item.setDefinition(item_cim)
+			return False, True, f"{attr_name}={expected_visible}"
+
+		return None, False, "Visibility property is not available for this item"
+	except Exception as exc:
+		LOGGER.warning("check_and_update_item_visibility: failed for '%s': %s", item_name, exc)
+		return None, False, f"Could not set visibility: {exc}"
+
+
 def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
 	"""Check service layer id and update when needed.
 
