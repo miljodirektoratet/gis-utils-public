@@ -222,11 +222,11 @@ def add_layers_from_config_sde_to_map(
 				sde_connection_path=None,
 			)
 			layer_result["skipped"] = True
-			LOGGER.info("-> Skip adding layer '%s': layer already exists in map", layer_name)
+			LOGGER.debug("-> Skip adding layer '%s': layer already exists in map", layer_name)
 			results.append(layer_result)
 			continue
 
-		LOGGER.info("-> Add layer from SDE source: %s", layer_name)
+		LOGGER.debug("-> Add layer from SDE source: %s", layer_name)
 		try:
 			sde_connection_path = resolve_layer_sde_connection_path(
 				service_def_config=service_def_config,
@@ -255,9 +255,9 @@ def add_layers_from_config_sde_to_map(
 		)
 		if layer_result.get("added"):
 			existing_layer_names.add(normalized_layer_name)
-			LOGGER.info("-> Added layer '%s' from %s", layer_name, layer_result.get("dataset_path"))
+			LOGGER.debug("-> Added layer '%s' from %s", layer_name, layer_result.get("dataset_path"))
 		elif layer_result.get("skipped"):
-			LOGGER.info("-> Skipped layer '%s'", layer_name)
+			LOGGER.debug("-> Skipped layer '%s'", layer_name)
 		else:
 			LOGGER.warning("-> Failed adding layer '%s': %s", layer_name, layer_result.get("error"))
 		results.append(layer_result)
@@ -622,7 +622,7 @@ def apply_lyrx_to_map_layers_from_config(
 			lyrx_lookup_index=lyrx_lookup_index,
 		)
 		if layer_result.get("applied"):
-			LOGGER.info(
+			LOGGER.debug(
 				"-> Applied LYRX (%s match) for '%s': %s",
 				layer_result.get("match_type"),
 				layer_name,
@@ -723,15 +723,19 @@ def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple
 	:return: Tuple ``(initialized, field_count)``.
 	"""
 	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
+	layer_name = getattr(layer, "name", "<unknown>")
 	if fields is None:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
 		return False, 0
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no featureTable)", layer_name)
 		return False, 0
 
 	builder = getattr(cim, "_arc_object", None)
 	if builder is None:
+		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM builder)", layer_name)
 		return False, 0
 
 	rebuilt_descriptions = []
@@ -749,6 +753,11 @@ def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple
 
 	feature_table.fieldDescriptions = rebuilt_descriptions
 	layer.setDefinition(cim)
+	LOGGER.debug(
+		"ensure_cim_field_descriptions: updated '%s' (field_count=%s)",
+		layer_name,
+		len(rebuilt_descriptions),
+	)
 	return True, len(rebuilt_descriptions)
 
 
@@ -759,11 +768,14 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 	:param desired_field_order: Desired field order from config.
 	:return: Reordered field count, 0 if unchanged, or None when unavailable.
 	"""
+	layer_name = getattr(layer, "name", "<unknown>")
 	if not desired_field_order:
+		LOGGER.debug("reorder_layer_fields: skip '%s' (no cols configured)", layer_name)
 		return 0
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if not field_descriptions:
+		LOGGER.debug("reorder_layer_fields: skip '%s' (no field descriptions)", layer_name)
 		return None
 
 	field_by_name: dict[str, Any] = {}
@@ -801,10 +813,16 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 	reordered_descriptions.extend(remaining_descriptions)
 
 	if reordered_descriptions == field_descriptions:
+		LOGGER.debug("reorder_layer_fields: already ordered for '%s'", layer_name)
 		return 0
 
 	cim.featureTable.fieldDescriptions = reordered_descriptions
 	layer.setDefinition(cim)
+	LOGGER.debug(
+		"reorder_layer_fields: updated '%s' (field_count=%s)",
+		layer_name,
+		len(reordered_descriptions),
+	)
 	return len(reordered_descriptions)
 
 
@@ -818,11 +836,14 @@ def set_only_fields_visible(
 	:param visible_field_names: Configured visible field list.
 	:return: Visibility summary tuple.
 	"""
+	layer_name = getattr(layer, "name", "<unknown>")
 	if not visible_field_names:
+		LOGGER.debug("set_only_fields_visible: skip '%s' (no cols configured)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if field_descriptions is None:
+		LOGGER.debug("set_only_fields_visible: skip '%s' (no field descriptions)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	visible_set = {
@@ -873,6 +894,14 @@ def set_only_fields_visible(
 		for name in visible_field_names
 		if _normalize_field_name(name) not in available_names
 	]
+	LOGGER.debug(
+		"set_only_fields_visible: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
+		layer_name,
+		made_visible,
+		made_hidden,
+		target_visible,
+		len(missing_config_fields),
+	)
 
 	return (
 		made_visible,
@@ -891,7 +920,9 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 	:param expected_service_id: Configured service id.
 	:return: Tuple ``(is_correct, was_updated)``.
 	"""
+	layer_name = getattr(layer, "name", "<unknown>")
 	if expected_service_id is None:
+		LOGGER.debug("check_and_update_service_id: skip '%s' (no service_id configured)", layer_name)
 		return True, False
 
 	try:
@@ -901,6 +932,7 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 		)
 
 		if current_id == expected_service_id:
+			LOGGER.debug("check_and_update_service_id: already correct for '%s' (%s)", layer_name, current_id)
 			return True, False
 
 		if hasattr(layer_cim, "serviceLayerId"):
@@ -909,8 +941,15 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 			layer_cim.serviceLayerID = expected_service_id
 
 		layer.setDefinition(layer_cim)
+		LOGGER.debug(
+			"check_and_update_service_id: updated '%s' (%s -> %s)",
+			layer_name,
+			current_id,
+			expected_service_id,
+		)
 		return False, True
-	except Exception:
+	except Exception as exc:
+		LOGGER.warning("check_and_update_service_id: failed for '%s': %s", layer_name, exc)
 		return False, False
 
 
@@ -924,19 +963,28 @@ def configure_display_field(
 	:param display_field_name: Configured display field.
 	:return: Tuple ``(is_correct, was_updated, info_message)``.
 	"""
+	layer_name = getattr(layer, "name", "<unknown>")
 	if not isinstance(display_field_name, str) or not display_field_name.strip():
+		LOGGER.debug("configure_display_field: skip '%s' (no display_field configured)", layer_name)
 		return None, False, "No display_field configured"
 
 	requested = display_field_name.strip()
 	requested_normalized = _normalize_field_name(requested)
 	if requested_normalized is None:
+		LOGGER.debug("configure_display_field: skip '%s' (empty display_field)", layer_name)
 		return None, False, "Configured display_field is empty after normalization"
 
 	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
 	if error_message:
+		LOGGER.warning("configure_display_field: field lookup failed for '%s': %s", layer_name, error_message)
 		return None, False, error_message
 
 	if requested_normalized not in available_by_normalized:
+		LOGGER.debug(
+			"configure_display_field: requested field not found for '%s' (requested=%s)",
+			layer_name,
+			requested,
+		)
 		return None, False, f"Configured display_field '{requested}' not found in layer fields"
 
 	resolved_field_name = available_by_normalized[requested_normalized]
@@ -949,12 +997,23 @@ def configure_display_field(
 
 		current_display = getattr(feature_table, "displayField", None)
 		if _normalize_field_name(current_display) == requested_normalized:
+			LOGGER.debug(
+				"configure_display_field: already correct for '%s' (%s)",
+				layer_name,
+				resolved_field_name,
+			)
 			return True, False, resolved_field_name
 
 		setattr(feature_table, "displayField", resolved_field_name)
 		layer.setDefinition(layer_cim)
+		LOGGER.debug(
+			"configure_display_field: updated '%s' (%s)",
+			layer_name,
+			resolved_field_name,
+		)
 		return False, True, resolved_field_name
 	except Exception as exc:
+		LOGGER.warning("configure_display_field: failed for '%s': %s", layer_name, exc)
 		return None, False, f"Could not set display field: {exc}"
 
 
@@ -969,8 +1028,10 @@ def configure_popup_fields_from_visible(
 	:return: Tuple ``(is_correct, was_updated, info_message)``.
 	"""
 	import arcpy
+	layer_name = getattr(layer, "name", "<unknown>")
 
 	if not isinstance(visible_field_names, list) or not visible_field_names:
+		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no cols configured)", layer_name)
 		return None, False, "No cols configured"
 
 	normalized_requested: list[str] = []
@@ -982,10 +1043,12 @@ def configure_popup_fields_from_visible(
 			normalized_requested.append(normalized)
 
 	if not normalized_requested:
+		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no valid cols)", layer_name)
 		return None, False, "No valid field names in cols"
 
 	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
 	if error_message:
+		LOGGER.warning("configure_popup_fields_from_visible: field lookup failed for '%s': %s", layer_name, error_message)
 		return None, False, error_message
 
 	popup_fields = [
@@ -994,10 +1057,12 @@ def configure_popup_fields_from_visible(
 		if name in available_by_normalized
 	]
 	if not popup_fields:
+		LOGGER.debug("configure_popup_fields_from_visible: no fields found for '%s' from configured cols", layer_name)
 		return None, False, "No configured cols fields were found in layer"
 
 	cim_module = getattr(arcpy, "cim", None)
 	if cim_module is None:
+		LOGGER.warning("configure_popup_fields_from_visible: arcpy.cim missing for '%s'", layer_name)
 		return None, False, "arcpy.cim is not available in this ArcGIS Pro environment"
 
 	try:
@@ -1029,12 +1094,23 @@ def configure_popup_fields_from_visible(
 			current_fields = getattr(current_media[0], "fields", None)
 
 		if isinstance(current_fields, list) and [str(field) for field in current_fields] == popup_fields:
+			LOGGER.debug(
+				"configure_popup_fields_from_visible: already correct for '%s' (field_count=%s)",
+				layer_name,
+				len(popup_fields),
+			)
 			return True, False, f"Configured {len(popup_fields)} popup field(s)"
 
 		layer_cim.popupInfo = popup_info
 		layer.setDefinition(layer_cim)
+		LOGGER.debug(
+			"configure_popup_fields_from_visible: updated '%s' (field_count=%s)",
+			layer_name,
+			len(popup_fields),
+		)
 		return False, True, f"Configured {len(popup_fields)} popup field(s)"
 	except Exception as exc:
+		LOGGER.warning("configure_popup_fields_from_visible: failed for '%s': %s", layer_name, exc)
 		return None, False, f"Could not set popupInfo from cols: {exc}"
 
 
