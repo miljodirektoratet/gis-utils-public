@@ -680,7 +680,7 @@ def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
 	"""
 	import arcpy
 
-	if layer.isGroupLayer or layer.isBasemapLayer:
+	if getattr(layer, "isGroupLayer", False) or getattr(layer, "isBasemapLayer", False):
 		return None, None, None
 
 	try:
@@ -731,6 +731,53 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 			lookup[normalized] = actual_name
 
 	return lookup, None
+
+
+def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str], str]:
+	"""Resolve configured cols to an explicit field-name list.
+
+	Supports the special keyword ``all`` (or ``*``) to include all source
+	fields on the layer.
+
+	:param layer: ArcGIS layer object.
+	:param configured_cols: Raw ``cols`` value from config.
+	:return: Tuple ``(resolved_cols, cols_mode)``.
+	"""
+	layer_name = getattr(layer, "name", "<unknown>")
+
+	if isinstance(configured_cols, list):
+		resolved = [field_name for field_name in configured_cols if isinstance(field_name, str) and field_name.strip()]
+		return resolved, "list"
+
+	if isinstance(configured_cols, str):
+		normalized_token = configured_cols.strip().lower()
+		if normalized_token in {"all", "*"}:
+			lookup, error_message = _get_layer_field_name_lookup(layer)
+			if error_message:
+				LOGGER.warning(
+					"resolve_configured_cols: could not resolve all fields for '%s': %s",
+					layer_name,
+					error_message,
+				)
+				return [], "all_lookup_failed"
+			return list(lookup.values()), "all"
+
+		LOGGER.warning(
+			"resolve_configured_cols: invalid cols string for '%s': %s",
+			layer_name,
+			configured_cols,
+		)
+		return [], "invalid_string"
+
+	if configured_cols is None:
+		return [], "none"
+
+	LOGGER.warning(
+		"resolve_configured_cols: invalid cols type for '%s': %s",
+		layer_name,
+		type(configured_cols).__name__,
+	)
+	return [], "invalid_type"
 
 
 def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple[bool, int, str]:
