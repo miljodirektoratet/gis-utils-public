@@ -676,7 +676,14 @@ def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
 		return None, None, None
 
 	try:
-		fields = arcpy.ListFields(layer)
+		fields = arcpy.ListFields(layer.dataSource)
+	except Exception:
+		try:
+			fields = arcpy.ListFields(layer)
+		except Exception:
+			return None, None, None
+
+	try:
 		cim = layer.getDefinition("V3")
 	except Exception:
 		return None, None, None
@@ -699,9 +706,12 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 	import arcpy
 
 	try:
-		fields = arcpy.ListFields(layer)
+		fields = arcpy.ListFields(layer.dataSource)
 	except Exception as exc:
-		return {}, f"Could not list fields: {exc}"
+		try:
+			fields = arcpy.ListFields(layer)
+		except Exception as exc_source:
+			return {}, f"Could not list fields: {exc}; {exc_source}"
 
 	lookup: dict[str, str] = {}
 	for field in fields:
