@@ -1,9 +1,18 @@
 """ArcGIS Pro layer-related helper functions.
 
 Public functions:
+- construct_sde_dataset_path: Build dataset path candidates from layer config.
+- add_layer_from_sde: Add one layer from SDE source.
 - add_layers_from_config_sde_to_map: Add YAML-configured layers from SDE to map.
+- resolve_lyrx_path: Resolve LYRX path for one layer.
 - apply_lyrx_to_layer: Apply LYRX transfer to a map layer.
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
+- ensure_cim_field_descriptions: Init CIM field descriptions from source fields.
+- reorder_layer_fields: Reorder fields using config-first ordering.
+- set_only_fields_visible: Apply visibility from configured field list.
+- check_and_update_service_id: Check and update service layer id.
+- configure_display_field: Configure display field from layer config.
+- configure_popup_fields_from_visible: Configure popup fields from visible config.
 """
 
 import logging
@@ -637,3 +646,395 @@ def apply_lyrx_to_map_layers_from_config(
 		"allow_suffix_match": allow_suffix_match,
 		"recurse_subfolders": recurse_subfolders,
 	}
+
+
+def _normalize_field_name(name: Any) -> str | None:
+	"""Normalize field name for robust config-to-layer matching.
+
+	:param name: Raw field name.
+	:return: Normalized lower-case field name or None.
+	"""
+	if not isinstance(name, str):
+		return None
+	normalized = name.strip().lower()
+	if not normalized:
+		return None
+	if "." in normalized:
+		normalized = normalized.split(".")[-1]
+	return normalized
+
+
+def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
+	"""Return layer fields, cim and field descriptions.
+
+	:param layer: ArcGIS layer object.
+	:return: Tuple ``(fields, cim, field_descriptions)``.
+	"""
+	import arcpy
+
+	if layer.isGroupLayer or layer.isBasemapLayer:
+		return None, None, None
+
+	try:
+		fields = arcpy.ListFields(layer)
+		cim = layer.getDefinition("V3")
+	except Exception:
+		return None, None, None
+
+	feature_table = getattr(cim, "featureTable", None)
+	field_descriptions = (
+		getattr(feature_table, "fieldDescriptions", None)
+		if feature_table is not None
+		else None
+	)
+	return fields, cim, field_descriptions
+
+
+def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None]:
+	"""Build normalized field-name lookup for one layer.
+
+	:param layer: ArcGIS layer object.
+	:return: Tuple ``(lookup, error_message)``.
+	"""
+	import arcpy
+
+	try:
+		fields = arcpy.ListFields(layer)
+	except Exception as exc:
+		return {}, f"Could not list fields: {exc}"
+
+	lookup: dict[str, str] = {}
+	for field in fields:
+		actual_name = getattr(field, "name", None)
+		if not isinstance(actual_name, str):
+			continue
+		normalized = _normalize_field_name(actual_name)
+		if normalized and normalized not in lookup:
+			lookup[normalized] = actual_name
+
+	return lookup, None
+
+
+def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple[bool, int]:
+	"""Initialize layer CIM field descriptions from source fields.
+
+	:param layer: ArcGIS layer object.
+	:param set_visible: Whether each new field should be visible.
+	:return: Tuple ``(initialized, field_count)``.
+	"""
+	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
+	if fields is None:
+		return False, 0
+
+	feature_table = getattr(cim, "featureTable", None)
+	if feature_table is None:
+		return False, 0
+
+	builder = getattr(cim, "_arc_object", None)
+	if builder is None:
+		return False, 0
+
+	rebuilt_descriptions = []
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		alias_name = getattr(field, "aliasName", None)
+		if not isinstance(field_name, str) or not field_name:
+			continue
+
+		fd = builder.createObject("CIMFieldDescription")
+		fd.fieldName = field_name
+		fd.alias = alias_name if isinstance(alias_name, str) else field_name
+		fd.visible = bool(set_visible)
+		rebuilt_descriptions.append(fd)
+
+	feature_table.fieldDescriptions = rebuilt_descriptions
+	layer.setDefinition(cim)
+	return True, len(rebuilt_descriptions)
+
+
+def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | None:
+	"""Reorder layer fields by config-first then remaining alphabetical.
+
+	:param layer: ArcGIS layer object.
+	:param desired_field_order: Desired field order from config.
+	:return: Reordered field count, 0 if unchanged, or None when unavailable.
+	"""
+	if not desired_field_order:
+		return 0
+
+	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+	if not field_descriptions:
+		return None
+
+	field_by_name: dict[str, Any] = {}
+	for field_description in field_descriptions:
+		raw_name = getattr(field_description, "fieldName", None) or getattr(
+			field_description, "name", None
+		)
+		normalized = _normalize_field_name(raw_name)
+		if normalized and normalized not in field_by_name:
+			field_by_name[normalized] = field_description
+
+	reordered_descriptions = []
+	seen_fields: set[str] = set()
+
+	for field_name in desired_field_order:
+		normalized = _normalize_field_name(field_name)
+		if normalized in field_by_name:
+			reordered_descriptions.append(field_by_name[normalized])
+			seen_fields.add(normalized)
+
+	remaining_descriptions = []
+	for field_description in field_descriptions:
+		raw_name = getattr(field_description, "fieldName", None) or getattr(
+			field_description, "name", None
+		)
+		normalized = _normalize_field_name(raw_name)
+		if normalized not in seen_fields:
+			remaining_descriptions.append(field_description)
+
+	remaining_descriptions.sort(
+		key=lambda field_description: (
+			(getattr(field_description, "fieldName", None) or getattr(field_description, "name", "")).lower()
+		)
+	)
+	reordered_descriptions.extend(remaining_descriptions)
+
+	if reordered_descriptions == field_descriptions:
+		return 0
+
+	cim.featureTable.fieldDescriptions = reordered_descriptions
+	layer.setDefinition(cim)
+	return len(reordered_descriptions)
+
+
+def set_only_fields_visible(
+	layer: Any,
+	visible_field_names: list[str],
+) -> tuple[int, int, int, int, int, list[str]]:
+	"""Set visibility so only configured fields are visible.
+
+	:param layer: ArcGIS layer object.
+	:param visible_field_names: Configured visible field list.
+	:return: Visibility summary tuple.
+	"""
+	if not visible_field_names:
+		return 0, 0, 0, 0, 0, []
+
+	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+	if field_descriptions is None:
+		return 0, 0, 0, 0, 0, []
+
+	visible_set = {
+		normalized
+		for normalized in (_normalize_field_name(name) for name in visible_field_names)
+		if normalized
+	}
+
+	made_visible = 0
+	made_hidden = 0
+
+	for field_description in field_descriptions:
+		raw_name = getattr(field_description, "fieldName", None) or getattr(
+			field_description, "name", None
+		)
+		normalized = _normalize_field_name(raw_name)
+		should_be_visible = normalized in visible_set
+		current_visible = getattr(field_description, "visible", True)
+
+		if should_be_visible and not current_visible:
+			field_description.visible = True
+			made_visible += 1
+		elif not should_be_visible and current_visible:
+			field_description.visible = False
+			made_hidden += 1
+
+	if made_visible > 0 or made_hidden > 0:
+		layer.setDefinition(cim)
+
+	final_visible = 0
+	final_hidden = 0
+	available_names: set[str] = set()
+	for field_description in field_descriptions:
+		raw_name = getattr(field_description, "fieldName", None) or getattr(
+			field_description, "name", None
+		)
+		normalized = _normalize_field_name(raw_name)
+		if normalized:
+			available_names.add(normalized)
+		if getattr(field_description, "visible", True):
+			final_visible += 1
+		else:
+			final_hidden += 1
+
+	target_visible = len(visible_set.intersection(available_names))
+	missing_config_fields = [
+		name
+		for name in visible_field_names
+		if _normalize_field_name(name) not in available_names
+	]
+
+	return (
+		made_visible,
+		made_hidden,
+		final_visible,
+		final_hidden,
+		target_visible,
+		missing_config_fields,
+	)
+
+
+def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
+	"""Check service layer id and update when needed.
+
+	:param layer: ArcGIS layer object.
+	:param expected_service_id: Configured service id.
+	:return: Tuple ``(is_correct, was_updated)``.
+	"""
+	if expected_service_id is None:
+		return True, False
+
+	try:
+		layer_cim = layer.getDefinition("V3")
+		current_id = getattr(layer_cim, "serviceLayerId", None) or getattr(
+			layer_cim, "serviceLayerID", None
+		)
+
+		if current_id == expected_service_id:
+			return True, False
+
+		if hasattr(layer_cim, "serviceLayerId"):
+			layer_cim.serviceLayerId = expected_service_id
+		else:
+			layer_cim.serviceLayerID = expected_service_id
+
+		layer.setDefinition(layer_cim)
+		return False, True
+	except Exception:
+		return False, False
+
+
+def configure_display_field(
+	layer: Any,
+	display_field_name: Any,
+) -> tuple[Any, bool, str]:
+	"""Set display field when configured field exists on layer.
+
+	:param layer: ArcGIS layer object.
+	:param display_field_name: Configured display field.
+	:return: Tuple ``(is_correct, was_updated, info_message)``.
+	"""
+	if not isinstance(display_field_name, str) or not display_field_name.strip():
+		return None, False, "No display_field configured"
+
+	requested = display_field_name.strip()
+	requested_normalized = _normalize_field_name(requested)
+	if requested_normalized is None:
+		return None, False, "Configured display_field is empty after normalization"
+
+	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
+	if error_message:
+		return None, False, error_message
+
+	if requested_normalized not in available_by_normalized:
+		return None, False, f"Configured display_field '{requested}' not found in layer fields"
+
+	resolved_field_name = available_by_normalized[requested_normalized]
+
+	try:
+		layer_cim = layer.getDefinition("V3")
+		feature_table = getattr(layer_cim, "featureTable", None)
+		if feature_table is None:
+			return None, False, "Layer CIM does not expose featureTable"
+
+		current_display = getattr(feature_table, "displayField", None)
+		if _normalize_field_name(current_display) == requested_normalized:
+			return True, False, resolved_field_name
+
+		setattr(feature_table, "displayField", resolved_field_name)
+		layer.setDefinition(layer_cim)
+		return False, True, resolved_field_name
+	except Exception as exc:
+		return None, False, f"Could not set display field: {exc}"
+
+
+def configure_popup_fields_from_visible(
+	layer: Any,
+	visible_field_names: list[str],
+) -> tuple[Any, bool, str]:
+	"""Configure popup fields from configured visible field order.
+
+	:param layer: ArcGIS layer object.
+	:param visible_field_names: Configured visible field list.
+	:return: Tuple ``(is_correct, was_updated, info_message)``.
+	"""
+	import arcpy
+
+	if not isinstance(visible_field_names, list) or not visible_field_names:
+		return None, False, "No cols configured"
+
+	normalized_requested: list[str] = []
+	seen: set[str] = set()
+	for name in visible_field_names:
+		normalized = _normalize_field_name(name)
+		if normalized and normalized not in seen:
+			seen.add(normalized)
+			normalized_requested.append(normalized)
+
+	if not normalized_requested:
+		return None, False, "No valid field names in cols"
+
+	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
+	if error_message:
+		return None, False, error_message
+
+	popup_fields = [
+		available_by_normalized[name]
+		for name in normalized_requested
+		if name in available_by_normalized
+	]
+	if not popup_fields:
+		return None, False, "No configured cols fields were found in layer"
+
+	cim_module = getattr(arcpy, "cim", None)
+	if cim_module is None:
+		return None, False, "arcpy.cim is not available in this ArcGIS Pro environment"
+
+	try:
+		layer_cim = layer.getDefinition("V3")
+
+		popup_ns = getattr(cim_module, "CIMPopup", None)
+		if (
+			popup_ns is not None
+			and hasattr(popup_ns, "CIMTableMediaInfo")
+			and hasattr(popup_ns, "CIMPopupInfo")
+		):
+			table_media = popup_ns.CIMTableMediaInfo()
+			popup_info = popup_ns.CIMPopupInfo()
+		else:
+			table_media = cim_module.CreateCIMObjectFromClassName("CIMTableMediaInfo", "V3")
+			popup_info = cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
+
+		table_media.fields = popup_fields
+		popup_info.mediaInfos = [table_media]
+
+		current_popup = getattr(layer_cim, "popupInfo", None)
+		current_media = (
+			getattr(current_popup, "mediaInfos", None)
+			if current_popup is not None
+			else None
+		)
+		current_fields = None
+		if isinstance(current_media, list) and current_media:
+			current_fields = getattr(current_media[0], "fields", None)
+
+		if isinstance(current_fields, list) and [str(field) for field in current_fields] == popup_fields:
+			return True, False, f"Configured {len(popup_fields)} popup field(s)"
+
+		layer_cim.popupInfo = popup_info
+		layer.setDefinition(layer_cim)
+		return False, True, f"Configured {len(popup_fields)} popup field(s)"
+	except Exception as exc:
+		return None, False, f"Could not set popupInfo from cols: {exc}"
+
+
