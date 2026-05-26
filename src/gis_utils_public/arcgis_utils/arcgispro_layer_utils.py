@@ -51,16 +51,20 @@ def _create_add_layer_from_sde_result(
 
 # Get existing layer names once so reruns do not add duplicates.
 def _get_existing_map_layer_names(map_obj: Any) -> set[str]:
-	"""Return case-insensitive set of existing layer names in map.
+	"""Return case-insensitive set of existing layer and table names in map.
 
 	:param map_obj: ArcGIS Pro map object.
-	:return: Set of existing layer names normalized with ``casefold()``.
+	:return: Set of existing layer/table names normalized with ``casefold()``.
 	"""
 	existing_names: set[str] = set()
 	for layer in map_obj.listLayers():
 		layer_name = getattr(layer, "name", None)
 		if isinstance(layer_name, str) and layer_name.strip():
 			existing_names.add(layer_name.strip().casefold())
+	for table in map_obj.listTables():
+		table_name = getattr(table, "name", None)
+		if isinstance(table_name, str) and table_name.strip():
+			existing_names.add(table_name.strip().casefold())
 	return existing_names
 
 
