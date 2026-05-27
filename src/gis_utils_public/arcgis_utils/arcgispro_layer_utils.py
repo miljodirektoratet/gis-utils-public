@@ -7,6 +7,8 @@ Public functions:
 - resolve_lyrx_path: Resolve LYRX path for one layer.
 - apply_lyrx_to_layer: Apply LYRX transfer to a map layer.
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
+- export_map_layers_to_lyrx: Export full layer definitions to LYRX files.
+- export_map_layers_to_lyrx_from_config: Export full layer definitions to LYRX files.
 - ensure_cim_field_descriptions: Init CIM field descriptions from source fields.
 - reorder_layer_fields: Reorder fields using config-first ordering.
 - set_only_fields_visible: Apply visibility from configured field list.
@@ -17,6 +19,7 @@ Public functions:
 
 import logging
 import os
+import re
 from typing import Any
 
 from .yaml_config_arcgis import (
@@ -654,6 +657,213 @@ def apply_lyrx_to_map_layers_from_config(
 		"allow_suffix_match": allow_suffix_match,
 		"recurse_subfolders": recurse_subfolders,
 	}
+
+
+def export_map_layers_to_lyrx(
+	map_obj: Any,
+	lyrx_dir: str,
+	layer_names: list[str] | None = None,
+	file_prefix: str | None = None,
+	file_suffix: str | None = None,
+	layer_ids: dict[str, Any] | None = None,
+	overwrite: bool = True,
+) -> dict[str, Any]:
+	"""Export full map-layer definitions to LYRX files.
+
+	When ``layer_names`` is provided, export only those names in given order.
+	When omitted, export all non-group, non-basemap layers in the map.
+
+	Filename pattern:
+	- When ``file_prefix`` and ``layer_ids`` are both set:
+	  ``<file_prefix>_<service_id>_<normalized_layer_name>.lyrx``.
+	- When only ``file_prefix`` is set: ``<file_prefix>_<normalized_layer_name>.lyrx``.
+	- Otherwise: ``<layer_name>_<file_suffix>.lyrx``.
+
+	:param map_obj: ArcGIS Pro map object.
+	:param lyrx_dir: Target LYRX directory.
+	:param layer_names: Optional ordered list of target layer names.
+	:param file_prefix: Optional filename prefix (e.g. data product name).
+		When set, ``file_suffix`` is ignored.
+	:param file_suffix: Optional LYRX filename suffix appended as ``<name>_<suffix>.lyrx``.
+		Ignored when ``file_prefix`` is set.
+	:param layer_ids: Optional mapping of layer name to service ID integer.
+		Only used when ``file_prefix`` is set. Layers missing from this dict
+		are exported without the id segment.
+	:param overwrite: Whether to overwrite existing LYRX files.
+	:return: Summary dictionary with per-layer export results.
+	"""
+	if not isinstance(lyrx_dir, str) or not lyrx_dir.strip():
+		raise ValueError("LYRX directory must be a non-empty string")
+
+	resolved_lyrx_dir = os.path.abspath(lyrx_dir)
+	os.makedirs(resolved_lyrx_dir, exist_ok=True)
+
+	suffix = str(file_suffix or "").strip()
+	prefix = str(file_prefix or "").strip() or None
+	results: list[dict[str, Any]] = []
+
+	def _is_exportable_layer(layer_obj: Any) -> bool:
+		return not bool(getattr(layer_obj, "isGroupLayer", False)) and not bool(
+			getattr(layer_obj, "isBasemapLayer", False)
+		)
+
+	def _iter_leaf_layers(layer_collection: list[Any]) -> list[Any]:
+		collected: list[Any] = []
+		for layer_obj in layer_collection:
+			if bool(getattr(layer_obj, "isGroupLayer", False)):
+				try:
+					collected.extend(_iter_leaf_layers(layer_obj.listLayers()))
+				except Exception:
+					continue
+				continue
+			collected.append(layer_obj)
+		return collected
+
+	def _append_result(
+		layer_name: str,
+		lyrx_path: str | None,
+		exported: bool,
+		skipped: bool,
+		error: str | None,
+		reason: str,
+	) -> None:
+		results.append(
+			{
+				"layer_name": layer_name,
+				"lyrx_path": lyrx_path,
+				"exported": exported,
+				"skipped": skipped,
+				"error": error,
+				"reason": reason,
+			}
+		)
+
+	def _export_one(layer_name: str, target_layer: Any) -> None:
+		if not _is_exportable_layer(target_layer):
+			_append_result(layer_name, None, False, True, None, "non_exportable_layer")
+			return
+
+		if prefix:
+			layer_stem = re.sub(r"[^0-9a-z_]+", "_", layer_name.lower()).strip("_") or "layer"
+			if layer_ids is not None and layer_name in layer_ids:
+				layer_id = layer_ids[layer_name]
+				lyrx_filename = f"{prefix}_{layer_id}_{layer_stem}.lyrx"
+			else:
+				lyrx_filename = f"{prefix}_{layer_stem}.lyrx"
+		else:
+			file_stem = layer_name.replace("/", "_").replace("\\", "_")
+			lyrx_filename = f"{file_stem}_{suffix}.lyrx" if suffix else f"{file_stem}.lyrx"
+		lyrx_path = os.path.join(resolved_lyrx_dir, lyrx_filename)
+		try:
+			if overwrite and os.path.exists(lyrx_path):
+				os.remove(lyrx_path)
+			target_layer.saveACopy(lyrx_path)
+			_append_result(layer_name, lyrx_path, True, False, None, "exported")
+		except Exception as exc:
+			_append_result(layer_name, lyrx_path, False, False, str(exc), "export_failed")
+
+	LOGGER.info(
+		"Export map layers to LYRX (lyrx_dir=%s, suffix=%s, overwrite=%s)",
+		resolved_lyrx_dir,
+		suffix,
+		overwrite,
+	)
+
+	if isinstance(layer_names, list):
+		target_name_sequence = [
+			str(name).strip() for name in layer_names if isinstance(name, str) and name.strip()
+		]
+		for layer_name in target_name_sequence:
+			target_layers = map_obj.listLayers(layer_name)
+			if not target_layers:
+				_append_result(
+					layer_name,
+					None,
+					False,
+					False,
+					"Target map layer was not found",
+					"missing_layer",
+				)
+				continue
+			if len(target_layers) > 1:
+				LOGGER.warning(
+					"-> Multiple target map layers found for '%s'. Using first match.",
+					layer_name,
+				)
+			_export_one(layer_name, target_layers[0])
+	else:
+		for target_layer in _iter_leaf_layers(map_obj.listLayers()):
+			layer_name = str(getattr(target_layer, "name", "") or "").strip()
+			if not layer_name:
+				continue
+			_export_one(layer_name, target_layer)
+
+	exported_count = sum(1 for item in results if bool(item.get("exported")))
+	skipped_count = sum(1 for item in results if bool(item.get("skipped")))
+	error_count = sum(1 for item in results if bool(item.get("error")))
+
+	return {
+		"layer_results": results,
+		"layer_total": len(results),
+		"layers_exported_count": exported_count,
+		"layers_skipped_count": skipped_count,
+		"layers_error_count": error_count,
+		"lyrx_dir": resolved_lyrx_dir,
+		"file_suffix": suffix,
+		"overwrite": overwrite,
+	}
+
+
+def export_map_layers_to_lyrx_from_config(
+	map_obj: Any,
+	service_def_config: dict[str, Any],
+	lyrx_dir: str,
+	file_prefix: str | None = None,
+	file_suffix: str | None = None,
+	overwrite: bool = True,
+) -> dict[str, Any]:
+	"""Export full map-layer definitions to LYRX files from YAML layer order.
+
+	Only feature layers are exported. Table entries (``type: table``) are skipped.
+
+	Filename pattern:
+	- When ``file_prefix`` is set: ``<file_prefix>_<service_id>_<normalized_layer_name>.lyrx``.
+	- Otherwise: ``<layer_name>_<file_suffix>.lyrx``.
+
+	:param map_obj: ArcGIS Pro map object.
+	:param service_def_config: Full map service definition config dictionary.
+	:param lyrx_dir: Target LYRX directory.
+	:param file_prefix: Optional filename prefix (e.g. data product name).
+		When set, ``file_suffix`` is ignored and ``service_id`` from config is
+		included in the filename.
+	:param file_suffix: Optional LYRX filename suffix. Ignored when ``file_prefix`` is set.
+	:param overwrite: Whether to overwrite existing LYRX files.
+	:return: Summary dictionary with per-layer export results.
+	"""
+	layer_entries = iter_map_service_layer_entries(service_def_config)
+	layer_names = []
+	layer_ids: dict[str, Any] = {}
+	for layer_name, layer_config in layer_entries:
+		if isinstance(layer_config, dict) and layer_config.get("type") == "table":
+			continue
+		layer_names.append(layer_name)
+		if isinstance(layer_config, dict) and layer_config.get("service_id") is not None:
+			layer_ids[layer_name] = layer_config["service_id"]
+
+	summary = export_map_layers_to_lyrx(
+		map_obj=map_obj,
+		lyrx_dir=lyrx_dir,
+		layer_names=layer_names,
+		file_prefix=file_prefix,
+		file_suffix=file_suffix,
+		layer_ids=layer_ids if layer_ids else None,
+		overwrite=overwrite,
+	)
+	summary["layer_total"] = len(layer_entries)
+	summary["layers_skipped_count"] = int(summary.get("layers_skipped_count", 0)) + (
+		len(layer_entries) - len(layer_names)
+	)
+	return summary
 
 
 def _normalize_field_name(name: Any) -> str | None:
