@@ -1162,10 +1162,19 @@ def check_and_update_definition_query(
 
 
 def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
-	"""Check service layer id and update when needed.
+	"""Apply YAML-configured service id to a layer or standalone table.
 
-	:param layer: ArcGIS layer object.
-	:param expected_service_id: Configured service id.
+	Reads the current service id from the first available CIM attribute and
+	updates only when it differs from ``expected_service_id``.
+
+	Supported CIM attributes (in lookup order):
+	- ``serviceLayerId``
+	- ``serviceLayerID``
+	- ``serviceTableId``
+	- ``serviceTableID``
+
+	:param layer: ArcGIS map item (feature layer or standalone table).
+	:param expected_service_id: Value from YAML ``service_id``.
 	:return: Tuple ``(is_correct, was_updated)``.
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
@@ -1174,26 +1183,51 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 		return True, False
 
 	try:
-		layer_cim = layer.getDefinition("V3")
-		current_id = getattr(layer_cim, "serviceLayerId", None) or getattr(
-			layer_cim, "serviceLayerID", None
+		expected_id = int(expected_service_id)
+	except Exception:
+		LOGGER.warning(
+			"check_and_update_service_id: skip '%s' (invalid configured service_id: %r)",
+			layer_name,
+			expected_service_id,
 		)
+		return False, False
 
-		if current_id == expected_service_id:
+	try:
+		layer_cim = layer.getDefinition("V3")
+		service_id_attrs = (
+			"serviceLayerId",
+			"serviceLayerID",
+			"serviceTableId",
+			"serviceTableID",
+		)
+		target_attr = next(
+			(attr_name for attr_name in service_id_attrs if hasattr(layer_cim, attr_name)),
+			None,
+		)
+		if target_attr is None:
+			LOGGER.warning(
+				"check_and_update_service_id: failed for '%s': no CIM service id attribute found",
+				layer_name,
+			)
+			return False, False
+
+		attr_value = getattr(layer_cim, target_attr, None)
+		try:
+			current_id = int(attr_value) if attr_value is not None else None
+		except Exception:
+			current_id = None
+
+		if current_id == expected_id:
 			LOGGER.debug("check_and_update_service_id: already correct for '%s' (%s)", layer_name, current_id)
 			return True, False
 
-		if hasattr(layer_cim, "serviceLayerId"):
-			layer_cim.serviceLayerId = expected_service_id
-		else:
-			layer_cim.serviceLayerID = expected_service_id
-
+		setattr(layer_cim, target_attr, expected_id)
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
 			"check_and_update_service_id: updated '%s' (%s -> %s)",
 			layer_name,
 			current_id,
-			expected_service_id,
+			expected_id,
 		)
 		return False, True
 	except Exception as exc:
