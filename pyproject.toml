@@ -31,23 +31,23 @@ dependencies = [
 # Install specific: uv sync --extra dev or uv sync --extra pytorch
 [project.optional-dependencies]
 dev = [
-  "pytest==7.4.3",
-  "ruff==0.6.4",
-  "ipykernel==6.29.5",
+  "pytest==9.0.3",
+  "ruff==0.15.14",
+  "ipykernel==7.2.0",
   "python-dotenv==1.2.2",
   # Azure dependencies
   "azure-common==1.1.28",
-  "azure-core==1.35.1",
+  "azure-core==1.41.0",
   "azure-keyvault==4.2.0",
-  "azure-keyvault-certificates==4.10.0",
-  "azure-keyvault-keys==4.11.0",
-  "azure-keyvault-secrets==4.10.0",
+  "azure-keyvault-certificates==4.11.1",
+  "azure-keyvault-keys==4.11.1",
+  "azure-keyvault-secrets==4.11.0",
   "azure-mgmt-core==1.6.0",
-  "azure-mgmt-storage==23.0.1",
+  "azure-mgmt-storage==25.0.0",
   "isodate==0.7.2",
   # Database dependencies
-  "psycopg2==2.9.10",
-  "pymssql==2.3.7",
+  "psycopg2==2.9.12",
+  "pymssql==2.3.13",
 ]
 pytorch = [
   "cupy-cuda12x>=14.0.1",
