@@ -1786,3 +1786,225 @@ def configure_popup_fields_from_visible(
 		return None, False, f"Could not set popupInfo from cols: {exc}"
 
 
+def compute_expected_field_aliases(
+	dataset_path: str,
+	field_alias_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Compute expected field aliases for a dataset without mutation.
+
+	Used for validation: determine what aliases should be applied based on
+	config overrides and auto-generation rules.
+
+	:param dataset_path: Full path to SDE dataset or feature class.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Dictionary mapping field names to expected aliases (system fields excluded).
+	"""
+	import arcpy
+
+	expected: dict[str, str] = {}
+	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception:
+		return {}
+
+	if not fields:
+		return {}
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str):
+			continue
+
+		if _is_system_field(field):
+			continue
+
+		normalized_field_name = _normalize_field_name(field_name)
+		resolved_alias = alias_overrides.get(
+			normalized_field_name,
+			_generate_field_alias(field_name),
+		)
+		expected[field_name] = resolved_alias
+
+	return expected
+
+
+def validate_field_aliases_on_sde_dataset(
+	dataset_path: str,
+	field_alias_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Validate current field aliases against expected values on SDE dataset.
+
+	Checks each field's current alias against what should be applied based on
+	config overrides and auto-generation rules.
+
+	:param dataset_path: Full path to SDE dataset or feature class.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Dictionary with validation results and mismatches.
+	"""
+	import arcpy
+
+	expected = compute_expected_field_aliases(dataset_path, field_alias_overrides)
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception as exc:
+		return {
+			"dataset_path": dataset_path,
+			"exists": False,
+			"error": str(exc),
+			"fields_checked": 0,
+			"fields_matching": 0,
+			"fields_mismatched": 0,
+			"expected_aliases": expected,
+			"mismatches": [],
+		}
+
+	if not fields:
+		return {
+			"dataset_path": dataset_path,
+			"exists": True,
+			"error": None,
+			"fields_checked": 0,
+			"fields_matching": 0,
+			"fields_mismatched": 0,
+			"expected_aliases": expected,
+			"mismatches": [],
+		}
+
+	mismatches: list[dict[str, str]] = []
+	fields_matching = 0
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str):
+			continue
+
+		if field_name not in expected:
+			continue
+
+		current_alias = getattr(field, "aliasName", field_name)
+		expected_alias = expected[field_name]
+
+		if current_alias == expected_alias:
+			fields_matching += 1
+		else:
+			mismatches.append({
+				"field_name": field_name,
+				"current_alias": current_alias,
+				"expected_alias": expected_alias,
+			})
+
+	return {
+		"dataset_path": dataset_path,
+		"exists": True,
+		"error": None,
+		"fields_checked": len(expected),
+		"fields_matching": fields_matching,
+		"fields_mismatched": len(mismatches),
+		"expected_aliases": expected,
+		"mismatches": mismatches,
+	}
+
+
+def normalize_sde_field_aliases(
+	dataset_path: str,
+	field_alias_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Normalize and update field aliases on one SDE dataset.
+
+	All non-system fields are evaluated. System fields (OID, geometry, GlobalID)
+	are skipped. Manual overrides from field_alias_overrides take precedence over
+	auto-generation.
+
+	:param dataset_path: Full path to SDE dataset or feature class.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Summary dictionary with counts and changed fields.
+	"""
+	import arcpy
+
+	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+	changes: list[dict[str, str]] = []
+	skipped: list[str] = []
+	errors: list[dict[str, str]] = []
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception as exc:
+		return {
+			"dataset_path": dataset_path,
+			"exists": False,
+			"error": str(exc),
+			"fields_processed": 0,
+			"fields_changed": 0,
+			"fields_skipped": 0,
+			"fields_errored": 0,
+			"changes": [],
+			"skipped": [],
+			"errors": [],
+		}
+
+	if not fields:
+		return {
+			"dataset_path": dataset_path,
+			"exists": True,
+			"error": None,
+			"fields_processed": 0,
+			"fields_changed": 0,
+			"fields_skipped": 0,
+			"fields_errored": 0,
+			"changes": [],
+			"skipped": [],
+			"errors": [],
+		}
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str):
+			continue
+
+		if _is_system_field(field):
+			skipped.append(field_name)
+			continue
+
+		normalized_field_name = _normalize_field_name(field_name)
+		resolved_alias = alias_overrides.get(
+			normalized_field_name,
+			_generate_field_alias(field_name),
+		)
+
+		current_alias = getattr(field, "aliasName", field_name)
+		if current_alias == resolved_alias:
+			continue
+
+		try:
+			arcpy.management.AlterField(
+				dataset_path,
+				field_name,
+				new_field_alias=resolved_alias,
+			)
+			changes.append({
+				"field_name": field_name,
+				"old_alias": current_alias,
+				"new_alias": resolved_alias,
+			})
+		except Exception as exc:
+			errors.append({
+				"field_name": field_name,
+				"error": str(exc),
+			})
+
+	return {
+		"dataset_path": dataset_path,
+		"exists": True,
+		"error": None,
+		"fields_processed": len(fields),
+		"fields_changed": len(changes),
+		"fields_skipped": len(skipped),
+		"fields_errored": len(errors),
+		"changes": changes,
+		"skipped": skipped,
+		"errors": errors,
+	}
+
