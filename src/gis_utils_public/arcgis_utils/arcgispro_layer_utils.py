@@ -1173,20 +1173,8 @@ def ensure_cim_field_descriptions(
 	:return: Tuple ``(initialized, field_count, creation_path)``.
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
-	
-	# Try CIM-based approach first (for layers)
-	try:
-		import arcpy as _arcpy_for_describe
-		_describe = _arcpy_for_describe.da.Describe(layer.dataSource)
-		fields = _describe.get("fields") if isinstance(_describe, dict) else None
-	except Exception:
-		fields = None
 
-	if not fields:
-		# Fallback to _get_layer_fields_and_descriptions
-		fields, _, _ = _get_layer_fields_and_descriptions(layer)
-
-	_, cim, _ = _get_layer_fields_and_descriptions(layer)
+	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
 
 	if fields is None:
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
@@ -1195,6 +1183,11 @@ def ensure_cim_field_descriptions(
 	if cim is None:
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM definition)", layer_name)
 		return False, 0, "none"
+
+	cim_type_name = type(cim).__name__.lower()
+	if "standalonetable" in cim_type_name:
+		LOGGER.debug("ensure_cim_field_descriptions: standalone table detected for '%s'", layer_name)
+		return _apply_table_field_aliases(layer, field_alias_overrides)
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
@@ -1219,8 +1212,12 @@ def ensure_cim_field_descriptions(
 	used_factory = False
 	used_builder = False
 	for field in fields:
-		field_name = getattr(field, "name", None)
-		alias_name = getattr(field, "aliasName", None)
+		if isinstance(field, dict):
+			field_name = field.get("name")
+			alias_name = field.get("aliasName")
+		else:
+			field_name = getattr(field, "name", None)
+			alias_name = getattr(field, "aliasName", None)
 		normalized_field_name = _normalize_field_name(field_name)
 		if not isinstance(field_name, str) or not field_name:
 			continue
