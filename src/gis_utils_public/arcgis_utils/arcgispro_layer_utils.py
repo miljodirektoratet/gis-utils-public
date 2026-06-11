@@ -882,6 +882,69 @@ def _normalize_field_name(name: Any) -> str | None:
 	return normalized
 
 
+def _normalize_field_alias_overrides(field_alias_overrides: Any) -> dict[str, str]:
+	"""Normalize configured field alias overrides by field name.
+
+	:param field_alias_overrides: Raw alias override mapping from config.
+	:return: Normalized mapping keyed by normalized field name.
+	"""
+	if not isinstance(field_alias_overrides, dict):
+		return {}
+
+	normalized_overrides: dict[str, str] = {}
+	for field_name, alias in field_alias_overrides.items():
+		normalized_name = _normalize_field_name(field_name)
+		if normalized_name is None:
+			continue
+		if not isinstance(alias, str):
+			continue
+		cleaned_alias = alias.strip()
+		if not cleaned_alias:
+			continue
+		normalized_overrides[normalized_name] = cleaned_alias
+	return normalized_overrides
+
+
+def _is_system_field(field: Any) -> bool:
+	"""Return whether a field should keep its original alias.
+
+	:param field: ArcPy field-like object.
+	:return: ``True`` for OID, geometry, GlobalID, and computed function fields, else ``False``.
+	"""
+	field_type = getattr(field, "type", None)
+	if isinstance(field_type, str) and field_type.strip().lower() in {"oid", "geometry", "globalid"}:
+		return True
+
+	field_name = _normalize_field_name(getattr(field, "name", None))
+	if field_name in {"objectid", "shape"}:
+		return True
+
+	raw_field_name = getattr(field, "name", None)
+	if isinstance(raw_field_name, str) and "(" in raw_field_name and ")" in raw_field_name:
+		return True
+
+	return False
+
+
+def _generate_field_alias(field_name: str) -> str:
+	"""Generate an automatic field alias from a field name.
+
+	:param field_name: Source field name.
+	:return: Generated alias text.
+	"""
+	alias = field_name.replace("_", " ")
+	alias = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", alias)
+	alias = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", alias)
+	alias = re.sub(r"\s+", " ", alias).strip().lower()
+	if not alias:
+		return field_name
+
+	alias = alias.replace("aa", "å")
+	alias = alias.replace("ae", "æ")
+	alias = alias.replace("oe", "ø")
+	return alias
+
+
 def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
 	"""Return layer fields, cim and field descriptions.
 
@@ -990,11 +1053,16 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 	return [], "invalid_type"
 
 
-def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple[bool, int, str]:
+def ensure_cim_field_descriptions(
+	layer: Any,
+	set_visible: bool = True,
+	field_alias_overrides: dict[str, Any] | None = None,
+) -> tuple[bool, int, str]:
 	"""Initialize layer CIM field descriptions from source fields.
 
 	:param layer: ArcGIS layer object.
 	:param set_visible: Whether each new field should be visible.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
 	:return: Tuple ``(initialized, field_count, creation_path)``.
 	"""
 	# Use arcpy.da.Describe to read the complete physical schema, bypassing CIM
@@ -1040,12 +1108,14 @@ def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM factory or builder)", layer_name)
 		return False, 0, "none"
 
+	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
 	rebuilt_descriptions = []
 	used_factory = False
 	used_builder = False
 	for field in fields:
 		field_name = getattr(field, "name", None)
 		alias_name = getattr(field, "aliasName", None)
+		normalized_field_name = _normalize_field_name(field_name)
 		if not isinstance(field_name, str) or not field_name:
 			continue
 
@@ -1069,8 +1139,15 @@ def ensure_cim_field_descriptions(layer: Any, set_visible: bool = True) -> tuple
 		if fd is None:
 			continue
 
+		resolved_alias = alias_name if isinstance(alias_name, str) else field_name
+		if not _is_system_field(field):
+			resolved_alias = alias_overrides.get(
+				normalized_field_name,
+				_generate_field_alias(field_name),
+			)
+
 		setattr(fd, "fieldName", field_name)
-		setattr(fd, "alias", alias_name if isinstance(alias_name, str) else field_name)
+		setattr(fd, "alias", resolved_alias)
 		setattr(fd, "visible", bool(set_visible))
 		rebuilt_descriptions.append(fd)
 
