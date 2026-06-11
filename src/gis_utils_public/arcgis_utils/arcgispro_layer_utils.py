@@ -407,6 +407,34 @@ def _resolve_lyrx_path_from_index(
 					"candidate_paths": suffix_matches,
 				}
 			)
+			return result
+
+		# Prefix match: file ends with _{layer_name}.lyrx (e.g. vern_0_naturvern_omraade.lyrx)
+		prefix_suffix = f"_{normalized_name}.lyrx"
+		prefix_matches = sorted(
+			[
+				paths[0]
+				for file_name, paths in lyrx_lookup_index.items()
+				if file_name.endswith(prefix_suffix)
+			],
+			key=lambda item: item.lower(),
+		)
+		if prefix_matches:
+			selected = prefix_matches[0]
+			if len(prefix_matches) > 1:
+				LOGGER.warning(
+					"-> Multiple prefix LYRX matches for '%s'. Using first alphabetically: %s",
+					layer_name,
+					selected,
+				)
+			result.update(
+				{
+					"lyrx_path": selected,
+					"match_type": "prefix",
+					"candidate_count": len(prefix_matches),
+					"candidate_paths": prefix_matches,
+				}
+			)
 
 	return result
 
@@ -1053,6 +1081,82 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 	return [], "invalid_type"
 
 
+def _apply_table_field_aliases(
+	table: Any,
+	field_alias_overrides: dict[str, Any] | None = None,
+) -> tuple[bool, int, str]:
+	"""Apply field aliases to a standalone table using arcpy.management.AlterField.
+
+	Standalone tables in ArcGIS Pro do not support CIM field description manipulation.
+	This function uses arcpy.management.AlterField to update aliases directly.
+
+	:param table: ArcGIS standalone table object.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Tuple ``(applied, field_count, method)``.
+	"""
+	import arcpy
+	
+	table_name = getattr(table, "name", "<unknown>")
+	
+	try:
+		fields = arcpy.ListFields(table.dataSource)
+	except Exception:
+		try:
+			fields = arcpy.ListFields(table)
+		except Exception:
+			LOGGER.debug("_apply_table_field_aliases: skip '%s' (could not list fields)", table_name)
+			return False, 0, "none"
+	
+	if not fields:
+		LOGGER.debug("_apply_table_field_aliases: skip '%s' (no fields)", table_name)
+		return False, 0, "none"
+	
+	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+	aliases_applied = 0
+	
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str) or not field_name:
+			continue
+		
+		# Skip system fields
+		if _is_system_field(field):
+			continue
+		
+		# Determine alias: manual override or auto-generated
+		normalized_field_name = _normalize_field_name(field_name)
+		resolved_alias = alias_overrides.get(
+			normalized_field_name,
+			_generate_field_alias(field_name),
+		)
+		
+		try:
+			# Use arcpy.management.AlterField to update the alias
+			arcpy.management.AlterField(
+				table.dataSource,
+				field_name,
+				new_field_alias=resolved_alias,
+			)
+			aliases_applied += 1
+		except Exception as exc:
+			LOGGER.debug(
+				"_apply_table_field_aliases: failed to update alias for '%s.%s': %s",
+				table_name,
+				field_name,
+				exc,
+			)
+	
+	if aliases_applied > 0:
+		LOGGER.debug(
+			"_apply_table_field_aliases: updated '%s' (alias_count=%s)",
+			table_name,
+			aliases_applied,
+		)
+		return True, aliases_applied, "arcpy.management"
+	else:
+		return False, 0, "none"
+
+
 def ensure_cim_field_descriptions(
 	layer: Any,
 	set_visible: bool = True,
@@ -1060,16 +1164,17 @@ def ensure_cim_field_descriptions(
 ) -> tuple[bool, int, str]:
 	"""Initialize layer CIM field descriptions from source fields.
 
-	:param layer: ArcGIS layer object.
-	:param set_visible: Whether each new field should be visible.
+	For feature layers: Uses CIM featureTable.fieldDescriptions.
+	For standalone tables: Uses arcpy.management.AlterField (CIM not fully supported).
+
+	:param layer: ArcGIS layer object or standalone table.
+	:param set_visible: Whether each new field should be visible (applies to layers only).
 	:param field_alias_overrides: Optional field-name to alias override mapping.
 	:return: Tuple ``(initialized, field_count, creation_path)``.
 	"""
-	# Use arcpy.da.Describe to read the complete physical schema, bypassing CIM
-	# visibility state. arcpy.ListFields(layer) can return only CIM-visible
-	# fields when fieldDescriptions are already saved, causing the re-init to
-	# produce fewer entries than the actual dataset on subsequent runs.
 	layer_name = getattr(layer, "name", "<unknown>")
+	
+	# Try CIM-based approach first (for layers)
 	try:
 		import arcpy as _arcpy_for_describe
 		_describe = _arcpy_for_describe.da.Describe(layer.dataSource)
@@ -1093,8 +1198,9 @@ def ensure_cim_field_descriptions(
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no featureTable)", layer_name)
-		return False, 0, "none"
+		# Standalone tables don't have featureTable in CIM; use arcpy.management approach
+		LOGGER.debug("ensure_cim_field_descriptions: using arcpy.management.AlterField for '%s'", layer_name)
+		return _apply_table_field_aliases(layer, field_alias_overrides)
 
 	# Prefer arcpy.cim factory when available, then fall back to CIM builder.
 	try:
