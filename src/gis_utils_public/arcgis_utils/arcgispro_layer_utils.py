@@ -19,9 +19,14 @@ Public functions:
 
 import logging
 import os
-import re
 from typing import Any
 
+from .field_utils import (
+	generate_field_alias,
+	is_system_field,
+	normalize_field_alias_overrides,
+	normalize_field_name,
+)
 from .yaml_config_arcgis import (
 	iter_map_service_layer_entries,
 	resolve_layer_sde_connection_path,
@@ -894,85 +899,6 @@ def export_map_layers_to_lyrx_from_config(
 	return summary
 
 
-def _normalize_field_name(name: Any) -> str | None:
-	"""Normalize field name for robust config-to-layer matching.
-
-	:param name: Raw field name.
-	:return: Normalized lower-case field name or None.
-	"""
-	if not isinstance(name, str):
-		return None
-	normalized = name.strip().lower()
-	if not normalized:
-		return None
-	if "." in normalized:
-		normalized = normalized.split(".")[-1]
-	return normalized
-
-
-def _normalize_field_alias_overrides(field_alias_overrides: Any) -> dict[str, str]:
-	"""Normalize configured field alias overrides by field name.
-
-	:param field_alias_overrides: Raw alias override mapping from config.
-	:return: Normalized mapping keyed by normalized field name.
-	"""
-	if not isinstance(field_alias_overrides, dict):
-		return {}
-
-	normalized_overrides: dict[str, str] = {}
-	for field_name, alias in field_alias_overrides.items():
-		normalized_name = _normalize_field_name(field_name)
-		if normalized_name is None:
-			continue
-		if not isinstance(alias, str):
-			continue
-		cleaned_alias = alias.strip()
-		if not cleaned_alias:
-			continue
-		normalized_overrides[normalized_name] = cleaned_alias
-	return normalized_overrides
-
-
-def _is_system_field(field: Any) -> bool:
-	"""Return whether a field should keep its original alias.
-
-	:param field: ArcPy field-like object.
-	:return: ``True`` for OID, geometry, GlobalID, and computed function fields, else ``False``.
-	"""
-	field_type = getattr(field, "type", None)
-	if isinstance(field_type, str) and field_type.strip().lower() in {"oid", "geometry", "globalid"}:
-		return True
-
-	field_name = _normalize_field_name(getattr(field, "name", None))
-	if field_name in {"objectid", "shape"}:
-		return True
-
-	raw_field_name = getattr(field, "name", None)
-	if isinstance(raw_field_name, str) and "(" in raw_field_name and ")" in raw_field_name:
-		return True
-
-	return False
-
-
-def _generate_field_alias(field_name: str) -> str:
-	"""Generate an automatic field alias from a field name.
-
-	:param field_name: Source field name.
-	:return: Generated alias text.
-	"""
-	alias = field_name.replace("_", " ")
-	alias = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", alias)
-	alias = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", alias)
-	alias = re.sub(r"\s+", " ", alias).strip().lower()
-	if not alias:
-		return field_name
-
-	alias = alias.replace("aa", "å")
-	alias = alias.replace("ae", "æ")
-	alias = alias.replace("oe", "ø")
-	return alias
-
-
 def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
 	"""Return layer fields, cim and field descriptions.
 
@@ -1027,7 +953,7 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 		actual_name = getattr(field, "name", None)
 		if not isinstance(actual_name, str):
 			continue
-		normalized = _normalize_field_name(actual_name)
+		normalized = normalize_field_name(actual_name)
 		if normalized and normalized not in lookup:
 			lookup[normalized] = actual_name
 
@@ -1081,82 +1007,6 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 	return [], "invalid_type"
 
 
-def _apply_table_field_aliases(
-	table: Any,
-	field_alias_overrides: dict[str, Any] | None = None,
-) -> tuple[bool, int, str]:
-	"""Apply field aliases to a standalone table using arcpy.management.AlterField.
-
-	Standalone tables in ArcGIS Pro do not support CIM field description manipulation.
-	This function uses arcpy.management.AlterField to update aliases directly.
-
-	:param table: ArcGIS standalone table object.
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Tuple ``(applied, field_count, method)``.
-	"""
-	import arcpy
-	
-	table_name = getattr(table, "name", "<unknown>")
-	
-	try:
-		fields = arcpy.ListFields(table.dataSource)
-	except Exception:
-		try:
-			fields = arcpy.ListFields(table)
-		except Exception:
-			LOGGER.debug("_apply_table_field_aliases: skip '%s' (could not list fields)", table_name)
-			return False, 0, "none"
-	
-	if not fields:
-		LOGGER.debug("_apply_table_field_aliases: skip '%s' (no fields)", table_name)
-		return False, 0, "none"
-	
-	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
-	aliases_applied = 0
-	
-	for field in fields:
-		field_name = getattr(field, "name", None)
-		if not isinstance(field_name, str) or not field_name:
-			continue
-		
-		# Skip system fields
-		if _is_system_field(field):
-			continue
-		
-		# Determine alias: manual override or auto-generated
-		normalized_field_name = _normalize_field_name(field_name)
-		resolved_alias = alias_overrides.get(
-			normalized_field_name,
-			_generate_field_alias(field_name),
-		)
-		
-		try:
-			# Use arcpy.management.AlterField to update the alias
-			arcpy.management.AlterField(
-				table.dataSource,
-				field_name,
-				new_field_alias=resolved_alias,
-			)
-			aliases_applied += 1
-		except Exception as exc:
-			LOGGER.debug(
-				"_apply_table_field_aliases: failed to update alias for '%s.%s': %s",
-				table_name,
-				field_name,
-				exc,
-			)
-	
-	if aliases_applied > 0:
-		LOGGER.debug(
-			"_apply_table_field_aliases: updated '%s' (alias_count=%s)",
-			table_name,
-			aliases_applied,
-		)
-		return True, aliases_applied, "arcpy.management"
-	else:
-		return False, 0, "none"
-
-
 def ensure_cim_field_descriptions(
 	layer: Any,
 	set_visible: bool = True,
@@ -1187,13 +1037,17 @@ def ensure_cim_field_descriptions(
 	cim_type_name = type(cim).__name__.lower()
 	if "standalonetable" in cim_type_name:
 		LOGGER.debug("ensure_cim_field_descriptions: standalone table detected for '%s'", layer_name)
-		return _apply_table_field_aliases(layer, field_alias_overrides)
+		from . import sde_utils
+
+		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
 		# Standalone tables don't have featureTable in CIM; use arcpy.management approach
 		LOGGER.debug("ensure_cim_field_descriptions: using arcpy.management.AlterField for '%s'", layer_name)
-		return _apply_table_field_aliases(layer, field_alias_overrides)
+		from . import sde_utils
+
+		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
 
 	# Prefer arcpy.cim factory when available, then fall back to CIM builder.
 	try:
@@ -1207,7 +1061,7 @@ def ensure_cim_field_descriptions(
 		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM factory or builder)", layer_name)
 		return False, 0, "none"
 
-	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
 	rebuilt_descriptions = []
 	used_factory = False
 	used_builder = False
@@ -1218,7 +1072,7 @@ def ensure_cim_field_descriptions(
 		else:
 			field_name = getattr(field, "name", None)
 			alias_name = getattr(field, "aliasName", None)
-		normalized_field_name = _normalize_field_name(field_name)
+		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
 		if not isinstance(field_name, str) or not field_name:
 			continue
 
@@ -1243,10 +1097,10 @@ def ensure_cim_field_descriptions(
 			continue
 
 		resolved_alias = alias_name if isinstance(alias_name, str) else field_name
-		if not _is_system_field(field):
+		if not is_system_field(field):
 			resolved_alias = alias_overrides.get(
 				normalized_field_name,
-				_generate_field_alias(field_name),
+				generate_field_alias(field_name),
 			)
 
 		setattr(fd, "fieldName", field_name)
@@ -1300,7 +1154,7 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 		raw_name = getattr(field_description, "fieldName", None) or getattr(
 			field_description, "name", None
 		)
-		normalized = _normalize_field_name(raw_name)
+		normalized = normalize_field_name(raw_name)
 		if normalized and normalized not in field_by_name:
 			field_by_name[normalized] = field_description
 
@@ -1308,7 +1162,7 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 	seen_fields: set[str] = set()
 
 	for field_name in desired_field_order:
-		normalized = _normalize_field_name(field_name)
+		normalized = normalize_field_name(field_name)
 		if normalized in field_by_name:
 			reordered_descriptions.append(field_by_name[normalized])
 			seen_fields.add(normalized)
@@ -1318,7 +1172,7 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 		raw_name = getattr(field_description, "fieldName", None) or getattr(
 			field_description, "name", None
 		)
-		normalized = _normalize_field_name(raw_name)
+		normalized = normalize_field_name(raw_name)
 		if normalized not in seen_fields:
 			remaining_descriptions.append(field_description)
 
@@ -1365,7 +1219,7 @@ def set_only_fields_visible(
 
 	visible_set = {
 		normalized
-		for normalized in (_normalize_field_name(name) for name in visible_field_names)
+		for normalized in (normalize_field_name(name) for name in visible_field_names)
 		if normalized
 	}
 
@@ -1376,7 +1230,7 @@ def set_only_fields_visible(
 		raw_name = getattr(field_description, "fieldName", None) or getattr(
 			field_description, "name", None
 		)
-		normalized = _normalize_field_name(raw_name)
+		normalized = normalize_field_name(raw_name)
 		should_be_visible = normalized in visible_set
 		current_visible = getattr(field_description, "visible", True)
 
@@ -1397,7 +1251,7 @@ def set_only_fields_visible(
 		raw_name = getattr(field_description, "fieldName", None) or getattr(
 			field_description, "name", None
 		)
-		normalized = _normalize_field_name(raw_name)
+		normalized = normalize_field_name(raw_name)
 		if normalized:
 			available_names.add(normalized)
 		if getattr(field_description, "visible", True):
@@ -1409,7 +1263,7 @@ def set_only_fields_visible(
 	missing_config_fields = [
 		name
 		for name in visible_field_names
-		if _normalize_field_name(name) not in available_names
+		if normalize_field_name(name) not in available_names
 	]
 	LOGGER.debug(
 		"set_only_fields_visible: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
@@ -1641,7 +1495,7 @@ def configure_display_field(
 		return None, False, "No display_field configured"
 
 	requested = display_field_name.strip()
-	requested_normalized = _normalize_field_name(requested)
+	requested_normalized = normalize_field_name(requested)
 	if requested_normalized is None:
 		LOGGER.debug("configure_display_field: skip '%s' (empty display_field)", layer_name)
 		return None, False, "Configured display_field is empty after normalization"
@@ -1668,7 +1522,7 @@ def configure_display_field(
 			return None, False, "Layer CIM does not expose featureTable"
 
 		current_display = getattr(feature_table, "displayField", None)
-		if _normalize_field_name(current_display) == requested_normalized:
+		if normalize_field_name(current_display) == requested_normalized:
 			LOGGER.debug(
 				"configure_display_field: already correct for '%s' (%s)",
 				layer_name,
@@ -1709,7 +1563,7 @@ def configure_popup_fields_from_visible(
 	normalized_requested: list[str] = []
 	seen: set[str] = set()
 	for name in visible_field_names:
-		normalized = _normalize_field_name(name)
+		normalized = normalize_field_name(name)
 		if normalized and normalized not in seen:
 			seen.add(normalized)
 			normalized_requested.append(normalized)
@@ -1786,128 +1640,6 @@ def configure_popup_fields_from_visible(
 		return None, False, f"Could not set popupInfo from cols: {exc}"
 
 
-def compute_expected_field_aliases(
-	dataset_path: str,
-	field_alias_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-	"""Compute expected field aliases for a dataset without mutation.
-
-	Used for validation: determine what aliases should be applied based on
-	config overrides and auto-generation rules.
-
-	:param dataset_path: Full path to SDE dataset or feature class.
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Dictionary mapping field names to expected aliases (system fields excluded).
-	"""
-	import arcpy
-
-	expected: dict[str, str] = {}
-	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
-
-	try:
-		fields = arcpy.ListFields(dataset_path)
-	except Exception:
-		return {}
-
-	if not fields:
-		return {}
-
-	for field in fields:
-		field_name = getattr(field, "name", None)
-		if not isinstance(field_name, str):
-			continue
-
-		if _is_system_field(field):
-			continue
-
-		normalized_field_name = _normalize_field_name(field_name)
-		resolved_alias = alias_overrides.get(
-			normalized_field_name,
-			_generate_field_alias(field_name),
-		)
-		expected[field_name] = resolved_alias
-
-	return expected
-
-
-def validate_field_aliases_on_sde_dataset(
-	dataset_path: str,
-	field_alias_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-	"""Validate current field aliases against expected values on SDE dataset.
-
-	Checks each field's current alias against what should be applied based on
-	config overrides and auto-generation rules.
-
-	:param dataset_path: Full path to SDE dataset or feature class.
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Dictionary with validation results and mismatches.
-	"""
-	import arcpy
-
-	expected = compute_expected_field_aliases(dataset_path, field_alias_overrides)
-
-	try:
-		fields = arcpy.ListFields(dataset_path)
-	except Exception as exc:
-		return {
-			"dataset_path": dataset_path,
-			"exists": False,
-			"error": str(exc),
-			"fields_checked": 0,
-			"fields_matching": 0,
-			"fields_mismatched": 0,
-			"expected_aliases": expected,
-			"mismatches": [],
-		}
-
-	if not fields:
-		return {
-			"dataset_path": dataset_path,
-			"exists": True,
-			"error": None,
-			"fields_checked": 0,
-			"fields_matching": 0,
-			"fields_mismatched": 0,
-			"expected_aliases": expected,
-			"mismatches": [],
-		}
-
-	mismatches: list[dict[str, str]] = []
-	fields_matching = 0
-
-	for field in fields:
-		field_name = getattr(field, "name", None)
-		if not isinstance(field_name, str):
-			continue
-
-		if field_name not in expected:
-			continue
-
-		current_alias = getattr(field, "aliasName", field_name)
-		expected_alias = expected[field_name]
-
-		if current_alias == expected_alias:
-			fields_matching += 1
-		else:
-			mismatches.append({
-				"field_name": field_name,
-				"current_alias": current_alias,
-				"expected_alias": expected_alias,
-			})
-
-	return {
-		"dataset_path": dataset_path,
-		"exists": True,
-		"error": None,
-		"fields_checked": len(expected),
-		"fields_matching": fields_matching,
-		"fields_mismatched": len(mismatches),
-		"expected_aliases": expected,
-		"mismatches": mismatches,
-	}
-
-
 def normalize_sde_field_aliases(
 	dataset_path: str,
 	field_alias_overrides: dict[str, str] | None = None,
@@ -1924,7 +1656,7 @@ def normalize_sde_field_aliases(
 	"""
 	import arcpy
 
-	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
 	changes: list[dict[str, str]] = []
 	skipped: list[str] = []
 	errors: list[dict[str, str]] = []
@@ -1964,14 +1696,14 @@ def normalize_sde_field_aliases(
 		if not isinstance(field_name, str):
 			continue
 
-		if _is_system_field(field):
+		if is_system_field(field):
 			skipped.append(field_name)
 			continue
 
-		normalized_field_name = _normalize_field_name(field_name)
+		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
 		resolved_alias = alias_overrides.get(
 			normalized_field_name,
-			_generate_field_alias(field_name),
+			generate_field_alias(field_name),
 		)
 
 		current_alias = getattr(field, "aliasName", field_name)

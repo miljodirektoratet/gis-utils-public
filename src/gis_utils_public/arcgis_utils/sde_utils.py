@@ -7,11 +7,11 @@ Public functions:
 import logging
 from typing import Any
 
-from .arcgispro_layer_utils import (
-	_generate_field_alias,
-	_is_system_field,
-	_normalize_field_alias_overrides,
-	_normalize_field_name,
+from .field_utils import (
+	generate_field_alias,
+	is_system_field,
+	normalize_field_alias_overrides,
+	normalize_field_name,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def apply_sde_field_design(
 	"""
 	import arcpy
 
-	alias_overrides = _normalize_field_alias_overrides(field_alias_overrides)
+	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
 	design_overrides = field_design_overrides if isinstance(field_design_overrides, dict) else {}
 
 	missing: list[str] = []
@@ -85,7 +85,7 @@ def apply_sde_field_design(
 		actual_name = getattr(field, "name", None)
 		if not isinstance(actual_name, str):
 			continue
-		normalized = _normalize_field_name(actual_name)
+		normalized = normalize_field_name(actual_name)
 		if normalized and normalized not in field_lookup:
 			field_lookup[normalized] = field
 
@@ -106,12 +106,12 @@ def apply_sde_field_design(
 		if not isinstance(field_name, str) or not field_name:
 			continue
 
-		if _is_system_field(field):
+		if is_system_field(field):
 			skipped.append(field_name)
 			continue
 
-		normalized = _normalize_field_name(field_name)
-		resolved_alias = alias_overrides.get(normalized, _generate_field_alias(field_name))
+		normalized = normalize_field_name(field_name) or field_name.strip().lower()
+		resolved_alias = alias_overrides.get(normalized, generate_field_alias(field_name))
 
 		field_design = design_overrides.get(field_name, {}) if design_overrides else {}
 		new_type = str(field_design.get("type", "#")) if field_design.get("type") else "#"
@@ -170,3 +170,198 @@ def apply_sde_field_design(
 		"skipped": skipped,
 		"errors": errors,
 	}
+
+
+def compute_expected_field_aliases(
+	dataset_path: str,
+	field_alias_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Compute expected field aliases for a dataset without mutation.
+
+	Used for validation: determine what aliases should be applied based on
+	config overrides and auto-generation rules.
+
+	:param dataset_path: Full path to SDE dataset or feature class.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Dictionary mapping field names to expected aliases (system fields excluded).
+	"""
+	import arcpy
+
+	expected: dict[str, str] = {}
+	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception:
+		return {}
+
+	if not fields:
+		return {}
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str):
+			continue
+
+		if is_system_field(field):
+			continue
+
+		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
+		resolved_alias = alias_overrides.get(
+			normalized_field_name,
+			generate_field_alias(field_name),
+		)
+		expected[field_name] = resolved_alias
+
+	return expected
+
+
+def validate_field_aliases_on_sde_dataset(
+	dataset_path: str,
+	field_alias_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Validate current field aliases against expected values on SDE dataset.
+
+	Checks each field's current alias against what should be applied based on
+	config overrides and auto-generation rules.
+
+	:param dataset_path: Full path to SDE dataset or feature class.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Dictionary with validation results and mismatches.
+	"""
+	import arcpy
+
+	expected = compute_expected_field_aliases(dataset_path, field_alias_overrides)
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception as exc:
+		return {
+			"dataset_path": dataset_path,
+			"exists": False,
+			"error": str(exc),
+			"fields_checked": 0,
+			"fields_matching": 0,
+			"fields_mismatched": 0,
+			"expected_aliases": expected,
+			"mismatches": [],
+		}
+
+	if not fields:
+		return {
+			"dataset_path": dataset_path,
+			"exists": True,
+			"error": None,
+			"fields_checked": 0,
+			"fields_matching": 0,
+			"fields_mismatched": 0,
+			"expected_aliases": expected,
+			"mismatches": [],
+		}
+
+	mismatches: list[dict[str, str]] = []
+	fields_matching = 0
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str):
+			continue
+
+		if field_name not in expected:
+			continue
+
+		current_alias = getattr(field, "aliasName", field_name)
+		expected_alias = expected[field_name]
+
+		if current_alias == expected_alias:
+			fields_matching += 1
+		else:
+			mismatches.append({
+				"field_name": field_name,
+				"current_alias": current_alias,
+				"expected_alias": expected_alias,
+			})
+
+	return {
+		"dataset_path": dataset_path,
+		"exists": True,
+		"error": None,
+		"fields_checked": len(expected),
+		"fields_matching": fields_matching,
+		"fields_mismatched": len(mismatches),
+		"expected_aliases": expected,
+		"mismatches": mismatches,
+	}
+
+
+def apply_table_field_aliases(
+	table: Any,
+	field_alias_overrides: dict[str, Any] | None = None,
+) -> tuple[bool, int, str]:
+	"""Apply field aliases to a standalone table using arcpy.management.AlterField.
+
+	Standalone tables in ArcGIS Pro do not support CIM field description manipulation.
+	This function uses arcpy.management.AlterField to update aliases directly.
+
+	:param table: ArcGIS standalone table object.
+	:param field_alias_overrides: Optional field-name to alias override mapping.
+	:return: Tuple ``(applied, field_count, method)``.
+	"""
+	import arcpy
+
+	table_name = getattr(table, "name", "<unknown>")
+
+	try:
+		fields = arcpy.ListFields(table.dataSource)
+	except Exception:
+		try:
+			fields = arcpy.ListFields(table)
+		except Exception:
+			LOGGER.debug("apply_table_field_aliases: skip '%s' (could not list fields)", table_name)
+			return False, 0, "none"
+
+	if not fields:
+		LOGGER.debug("apply_table_field_aliases: skip '%s' (no fields)", table_name)
+		return False, 0, "none"
+
+	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
+	aliases_applied = 0
+
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str) or not field_name:
+			continue
+
+		if is_system_field(field):
+			continue
+
+		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
+		resolved_alias = alias_overrides.get(
+			normalized_field_name,
+			generate_field_alias(field_name),
+		)
+
+		try:
+			arcpy.management.AlterField(
+				table.dataSource,
+				field_name,
+				new_field_alias=resolved_alias,
+			)
+			aliases_applied += 1
+		except Exception as exc:
+			LOGGER.debug(
+				"apply_table_field_aliases: failed to update alias for '%s.%s': %s",
+				table_name,
+				field_name,
+				exc,
+			)
+
+	if aliases_applied > 0:
+		LOGGER.debug(
+			"apply_table_field_aliases: updated '%s' (alias_count=%s)",
+			table_name,
+			aliases_applied,
+		)
+		return True, aliases_applied, "arcpy.management"
+
+	return False, 0, "none"
