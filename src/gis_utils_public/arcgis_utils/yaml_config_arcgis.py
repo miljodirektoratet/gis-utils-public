@@ -3,9 +3,12 @@
 Public functions:
 - load_map_service_config: Load and split map/layer sections from YAML.
 - load_map_and_infrastructure_config: Load map YAML together with infrastructure YAML.
+- load_map_infrastructure_and_datamodel_config: Load map YAML, infrastructure, and optional datamodel YAML.
 - iter_map_service_layer_entries: Return ordered YAML layer entries.
-- resolve_sde_connection_value: Resolve SDE path from env-keyed or direct config.
+- resolve_datamodel_field_design: Resolve layer field design from datamodel datasets.
+- resolve_layer_database_name: Resolve database key from layer/map config.
 - resolve_infrastructure_sde_connection_path: Resolve SDE path from infrastructure by database/env/access.
+- resolve_infrastructure_datamodel_path: Resolve datamodel path from infrastructure by database.
 - resolve_layer_sde_connection_path: Resolve layer/map SDE path with fallback.
 - validate_lyr_source_sde_paths: Validate configured datasets against SDE paths.
 """
@@ -121,52 +124,224 @@ def load_map_and_infrastructure_config(
     return config, config_map, config_layers, config_infrastructure
 
 
-def resolve_sde_connection_value(
-    sde_config: dict[str, str] | str | None, env: str = "test"
+def _resolve_datamodel_path(
+    map_config: dict[str, Any],
+    infrastructure_config: dict[str, Any] | None,
+    map_config_path: str | os.PathLike[str],
+    datamodel_file: str | os.PathLike[str] | None = None,
 ) -> str | None:
-    """Resolve an SDE connection path from config.
+    """Resolve datamodel YAML path from explicit input or map config.
 
-    :param sde_config: SDE config as env-keyed dict or direct path string.
-    :param env: Preferred environment key.
-    :return: Resolved SDE connection path string, or ``None`` if not found.
+    Resolution order:
+    1) explicit ``datamodel_file`` argument
+    2) ``map.datamodel`` in map service config
+    3) ``infrastructure.sde_databases[map.database].datamodel``
 
-    Example::
+    Relative paths are resolved relative to the map service config directory.
 
-        resolve_sde_connection_value(
-            {"test": r"C:/connections/test.sde", "prod": r"C:/connections/prod.sde"},
-            env="test",
-        )
-        # output: "C:/connections/test.sde"
-
-        resolve_sde_connection_value(r"C:/connections/shared.sde")
-        # output: "C:/connections/shared.sde"
+    :param map_config: Parsed map config dictionary.
+    :param map_config_path: Path to map service config file.
+    :param datamodel_file: Optional explicit datamodel path override.
+    :return: Absolute datamodel path, or ``None`` when not configured.
     """
-    LOGGER.debug("Resolving SDE connection for env: %s", env)
-    if isinstance(sde_config, dict):
-        preferred = sde_config.get(env)
-        if isinstance(preferred, str) and preferred.strip():
-            return preferred.strip()
-        for value in sde_config.values():
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+    candidate = None
+    if isinstance(datamodel_file, (str, os.PathLike)):
+        candidate = str(datamodel_file).strip()
+    if not candidate and isinstance(map_config, dict):
+        configured = map_config.get("datamodel")
+        if isinstance(configured, str) and configured.strip():
+            candidate = configured.strip()
+    if not candidate and isinstance(map_config, dict):
+        map_database = map_config.get("database")
+        if isinstance(map_database, str) and map_database.strip() and isinstance(infrastructure_config, dict):
+            return resolve_infrastructure_datamodel_path(
+                infrastructure_config=infrastructure_config,
+                database_name=map_database.strip(),
+                base_dir=os.path.dirname(str(map_config_path)),
+            )
+
+    if not candidate:
         return None
-    if isinstance(sde_config, str) and sde_config.strip():
-        return sde_config.strip()
-    return None
+
+    if os.path.isabs(candidate):
+        return candidate
+
+    base_dir = os.path.dirname(str(map_config_path))
+    return os.path.normpath(os.path.join(base_dir, candidate))
 
 
-def _looks_like_sde_path(value: str | None) -> bool:
-    """Return whether a value appears to be a direct SDE file path.
+def load_map_infrastructure_and_datamodel_config(
+    conf_file: str | os.PathLike[str],
+    infrastructure_file: str | os.PathLike[str] | None = None,
+    datamodel_file: str | os.PathLike[str] | None = None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    list[tuple[str, dict[str, Any]]],
+    dict[str, Any],
+    dict[str, Any],
+]:
+    """Load map service config with optional infrastructure and datamodel config.
 
-    :param value: Candidate value.
-    :return: ``True`` when the value looks like a file path to ``.sde``.
+    :param conf_file: Path to the map service YAML file.
+    :param infrastructure_file: Optional path to infrastructure YAML file.
+    :param datamodel_file: Optional path to datamodel YAML file.
+        When omitted, ``map.datamodel`` is used if present.
+    :return: Tuple ``(config, config_map, config_layers, config_infrastructure, config_datamodel)``.
     """
-    if not isinstance(value, str):
-        return False
-    normalized = value.strip()
-    if not normalized:
-        return False
-    return normalized.lower().endswith(".sde") or "\\" in normalized or "/" in normalized
+    config, config_map, config_layers, config_infrastructure = (
+        load_map_and_infrastructure_config(
+            conf_file=conf_file,
+            infrastructure_file=infrastructure_file,
+        )
+    )
+
+    config_datamodel: dict[str, Any] = {}
+    datamodel_path = _resolve_datamodel_path(
+        map_config=config_map,
+        infrastructure_config=config_infrastructure,
+        map_config_path=conf_file,
+        datamodel_file=datamodel_file,
+    )
+
+    if datamodel_path:
+        if not os.path.isfile(datamodel_path):
+            raise FileNotFoundError(
+                f"Datamodel config file does not exist: {datamodel_path}"
+            )
+
+        LOGGER.info("Loading datamodel config YAML: %s", datamodel_path)
+        raw_datamodel = _normalize_config_values(read_yml_config(datamodel_path))
+        if not isinstance(raw_datamodel, dict):
+            raise ValueError("Datamodel config must be a YAML mapping")
+        config_datamodel = raw_datamodel
+
+    return config, config_map, config_layers, config_infrastructure, config_datamodel
+
+
+def resolve_datamodel_field_design(
+    datamodel_config: dict[str, Any] | None,
+    layer_name: str,
+    layer_config: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve field-design mapping for one layer from datamodel config.
+
+    Matching strategy:
+    1) dataset entry key equals ``layer_name``
+    2) source.dataset equals layer source.dataset
+
+    Converts datamodel field attributes to pipeline field-design keys:
+    - ``is_null`` -> ``nullable``
+    - ``data_type`` -> ``type``
+
+    :param datamodel_config: Parsed datamodel YAML dictionary.
+    :param layer_name: Layer key name in map service config.
+    :param layer_config: Optional layer config dictionary with ``source``.
+    :return: Mapping of ``field_name -> field design attrs``.
+    """
+    if not isinstance(datamodel_config, dict):
+        return {}
+
+    datasets = datamodel_config.get("datasets")
+    if not isinstance(datasets, dict):
+        return {}
+
+    selected_dataset_cfg: dict[str, Any] | None = None
+
+    direct_cfg = datasets.get(layer_name)
+    if isinstance(direct_cfg, dict):
+        selected_dataset_cfg = direct_cfg
+
+    layer_source = (
+        layer_config.get("source", {})
+        if isinstance(layer_config, dict)
+        else {}
+    )
+    layer_dataset = layer_source.get("dataset") if isinstance(layer_source, dict) else None
+
+    if selected_dataset_cfg is None and isinstance(layer_dataset, str) and layer_dataset.strip():
+        normalized_layer_dataset = layer_dataset.strip()
+        for dataset_cfg in datasets.values():
+            if not isinstance(dataset_cfg, dict):
+                continue
+            source_cfg = dataset_cfg.get("source")
+            if not isinstance(source_cfg, dict):
+                continue
+            source_dataset = source_cfg.get("dataset")
+            if isinstance(source_dataset, str) and source_dataset.strip() == normalized_layer_dataset:
+                selected_dataset_cfg = dataset_cfg
+                break
+
+    if not isinstance(selected_dataset_cfg, dict):
+        return {}
+
+    fields_cfg = selected_dataset_cfg.get("fields")
+    if not isinstance(fields_cfg, dict):
+        return {}
+
+    resolved_field_design: dict[str, dict[str, Any]] = {}
+    for field_name, attrs in fields_cfg.items():
+        if not isinstance(field_name, str) or not field_name.strip():
+            continue
+
+        normalized_field_name = field_name.strip()
+        field_attrs: dict[str, Any] = {}
+        if isinstance(attrs, dict):
+            alias = attrs.get("alias")
+            if isinstance(alias, str) and alias.strip():
+                field_attrs["alias"] = alias.strip()
+
+            nullable_value = attrs.get("nullable")
+            if nullable_value is None:
+                nullable_value = attrs.get("is_null")
+            if isinstance(nullable_value, bool):
+                field_attrs["nullable"] = nullable_value
+
+            length_value = attrs.get("length")
+            if isinstance(length_value, int):
+                field_attrs["length"] = length_value
+
+            type_value = attrs.get("type")
+            if type_value is None:
+                type_value = attrs.get("data_type")
+            if isinstance(type_value, str) and type_value.strip():
+                field_attrs["type"] = type_value.strip()
+
+        resolved_field_design[normalized_field_name] = field_attrs
+
+    return resolved_field_design
+
+
+def resolve_layer_database_name(
+    service_def_config: dict[str, Any],
+    layer_config: dict[str, Any] | None = None,
+) -> str | None:
+    """Resolve database key for one layer from ``source.database`` or ``map.database``.
+
+    :param service_def_config: Full map service definition config dictionary.
+    :param layer_config: Per-layer config dictionary.
+    :return: Resolved database key, or ``None`` when not configured.
+    """
+    layer_source = (
+        (layer_config or {}).get("source", {})
+        if isinstance(layer_config, dict)
+        else {}
+    )
+    if isinstance(layer_source, dict):
+        layer_database = layer_source.get("database")
+        if isinstance(layer_database, str) and layer_database.strip():
+            return layer_database.strip()
+
+    map_cfg = (
+        (service_def_config or {}).get("map", {})
+        if isinstance(service_def_config, dict)
+        else {}
+    )
+    map_database = map_cfg.get("database") if isinstance(map_cfg, dict) else None
+    if isinstance(map_database, str) and map_database.strip():
+        return map_database.strip()
+
+    return None
 
 
 def resolve_infrastructure_sde_connection_path(
@@ -236,6 +411,57 @@ def resolve_infrastructure_sde_connection_path(
     return connection_path.strip()
 
 
+def resolve_infrastructure_datamodel_path(
+    infrastructure_config: dict[str, Any],
+    database_name: str,
+    base_dir: str | os.PathLike[str] | None = None,
+) -> str:
+    """Resolve datamodel path from infrastructure config using database key.
+
+    Expected structure::
+
+        sde_databases:
+          <database_name>:
+            datamodel: <relative-or-absolute-path>
+
+    :param infrastructure_config: Parsed infrastructure YAML dictionary.
+    :param database_name: Database key from map/layer config.
+    :param base_dir: Optional base directory for resolving relative paths.
+    :return: Absolute or normalized datamodel path.
+    :raises ValueError: If datamodel mapping is missing/invalid.
+    """
+    if not isinstance(infrastructure_config, dict):
+        raise ValueError("Infrastructure config must be a dictionary")
+
+    if not isinstance(database_name, str) or not database_name.strip():
+        raise ValueError("database_name must be a non-empty string")
+
+    sde_databases = infrastructure_config.get("sde_databases")
+    if not isinstance(sde_databases, dict):
+        raise ValueError("Missing or invalid 'sde_databases' in infrastructure config")
+
+    database_cfg = sde_databases.get(database_name.strip())
+    if not isinstance(database_cfg, dict):
+        raise ValueError(
+            f"Database '{database_name}' not found in infrastructure.sde_databases"
+        )
+
+    datamodel_value = database_cfg.get("datamodel")
+    if not isinstance(datamodel_value, str) or not datamodel_value.strip():
+        raise ValueError(
+            f"Missing 'datamodel' for database '{database_name}' in infrastructure.sde_databases"
+        )
+
+    normalized_datamodel = datamodel_value.strip()
+    if os.path.isabs(normalized_datamodel):
+        return normalized_datamodel
+
+    if isinstance(base_dir, (str, os.PathLike)) and str(base_dir).strip():
+        return os.path.normpath(os.path.join(str(base_dir), normalized_datamodel))
+
+    return os.path.normpath(normalized_datamodel)
+
+
 def resolve_layer_sde_connection_path(
     service_def_config: dict[str, Any],
     layer_config: dict[str, Any] | None = None,
@@ -247,74 +473,42 @@ def resolve_layer_sde_connection_path(
     """Resolve SDE connection path from layer/map config with fallback.
 
     Priority:
-    1) ``layer_config.source.sde_connection`` (string)
-    2) ``service_def_config.map.sde_connection[env]`` (dict) or string
-    3) Resolve database name via ``infrastructure_config.sde_databases``
-    4) ``fallback_path``
+    1) Resolve ``source.database`` (layer) or ``map.database`` (map)
+    2) Resolve SDE path via ``infrastructure_config.sde_databases`` using env/access
+    3) ``fallback_path``
 
     :param service_def_config: Full map service definition config dictionary.
     :param layer_config: Per-layer config dictionary.
     :param infrastructure_config: Optional infrastructure config dictionary.
-    :param env: Environment key used for map-level dict config.
+    :param env: Environment key used for infrastructure lookup.
     :param access_mode: Access mode used for infrastructure lookup.
     :param fallback_path: Optional fallback SDE path.
     :return: Resolved SDE connection path.
     :raises ValueError: If no valid SDE path can be resolved.
     """
-    layer_source = (
-        (layer_config or {}).get("source", {})
-        if isinstance(layer_config, dict)
-        else {}
+    resolved_database = resolve_layer_database_name(
+        service_def_config=service_def_config,
+        layer_config=layer_config,
     )
-    map_cfg = (
-        (service_def_config or {}).get("map", {})
-        if isinstance(service_def_config, dict)
-        else {}
-    )
-
-    layer_sde = layer_source.get("sde_connection")
-    if isinstance(layer_sde, str) and layer_sde.strip():
-        normalized_layer_sde = layer_sde.strip()
-        if _looks_like_sde_path(normalized_layer_sde):
-            return normalized_layer_sde
-
-        if isinstance(infrastructure_config, dict) and infrastructure_config:
-            return resolve_infrastructure_sde_connection_path(
-                infrastructure_config=infrastructure_config,
-                database_name=normalized_layer_sde,
-                env=env,
-                access_mode=access_mode,
+    if isinstance(resolved_database, str) and resolved_database.strip():
+        if not (isinstance(infrastructure_config, dict) and infrastructure_config):
+            raise ValueError(
+                "database key resolved from config, but infrastructure_config is missing"
             )
 
-        raise ValueError(
-            "Layer source.sde_connection is a database name, but infrastructure_config is missing"
-        )
-
-    map_sde = map_cfg.get("sde_connection")
-    resolved_map_sde = resolve_sde_connection_value(sde_config=map_sde, env=env)
-    if isinstance(resolved_map_sde, str) and resolved_map_sde.strip():
-        normalized_map_sde = resolved_map_sde.strip()
-        if _looks_like_sde_path(normalized_map_sde):
-            return normalized_map_sde
-
-        if isinstance(infrastructure_config, dict) and infrastructure_config:
-            return resolve_infrastructure_sde_connection_path(
-                infrastructure_config=infrastructure_config,
-                database_name=normalized_map_sde,
-                env=env,
-                access_mode=access_mode,
-            )
-
-        raise ValueError(
-            "map.sde_connection resolved to a database name, but infrastructure_config is missing"
+        return resolve_infrastructure_sde_connection_path(
+            infrastructure_config=infrastructure_config,
+            database_name=resolved_database.strip(),
+            env=env,
+            access_mode=access_mode,
         )
 
     if isinstance(fallback_path, str) and fallback_path.strip():
         return fallback_path.strip()
 
     raise ValueError(
-        "No SDE connection path found. Set source.sde_connection as path/database, "
-        "or map.sde_connection for selected env, or provide infrastructure_config/fallback_path."
+        "No SDE connection path found. Set source.database or map.database and provide "
+        "infrastructure_config, or provide fallback_path."
     )
 
 
@@ -376,7 +570,7 @@ def validate_lyr_source_sde_paths(
         )
 
         out_msg(f"\nLayer: {layer_name}")
-        out_msg(f"  sde_connection: {sde_path}")
+        out_msg(f"  resolved_sde_path: {sde_path}")
         out_msg(f"  feature_dataset: {feature_dataset}")
         out_msg(f"  dataset: {dataset}")
 
