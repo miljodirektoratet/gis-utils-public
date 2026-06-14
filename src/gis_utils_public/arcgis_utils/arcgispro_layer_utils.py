@@ -210,14 +210,18 @@ def add_layer_from_sde(
 def add_layers_from_config_sde_to_map(
 	map_obj: Any,
 	service_def_config: dict[str, Any],
+	infrastructure_config: dict[str, Any] | None = None,
 	env: str = "test",
+	access_mode: str = "read",
 	fallback_sde_path: str | None = None,
 ) -> dict[str, Any]:
 	"""Add all YAML-defined layers from SDE to the target map.
 
 	:param map_obj: ArcGIS Pro map object.
 	:param service_def_config: Full map service definition config dictionary.
+	:param infrastructure_config: Optional infrastructure config dictionary.
 	:param env: Environment key for resolving map-level SDE connection.
+	:param access_mode: Access mode for infrastructure SDE resolution.
 	:param fallback_sde_path: Optional fallback SDE path.
 	:return: Summary dictionary with per-layer results.
 	"""
@@ -244,7 +248,9 @@ def add_layers_from_config_sde_to_map(
 			sde_connection_path = resolve_layer_sde_connection_path(
 				service_def_config=service_def_config,
 				layer_config=layer_config,
+				infrastructure_config=infrastructure_config,
 				env=env,
+				access_mode=access_mode,
 				fallback_path=fallback_sde_path,
 			)
 		except Exception as exc:
