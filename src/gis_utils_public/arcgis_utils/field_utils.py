@@ -165,13 +165,14 @@ def apply_field_data_design(
 	for field_name, attrs in field_design.items():
 		attempted += 1
 		try:
-			arcpy.management.AlterField(
-				in_table=dataset_path,
-				field=field_name,
-				new_field_alias=attrs.get("alias", "#") or "#",
-				new_field_length=attrs.get("length", "#") if attrs.get("length") is not None else "#",
-				new_field_is_nullable=attrs.get("nullable", "#") if attrs.get("nullable") is not None else "#",
-			)
+			kwargs: dict[str, Any] = {"in_table": dataset_path, "field": field_name}
+			if "alias" in attrs:
+				kwargs["new_field_alias"] = attrs["alias"]
+			if "length" in attrs and attrs["length"] is not None:
+				kwargs["field_length"] = attrs["length"]
+			if "nullable" in attrs and attrs["nullable"] is not None:
+				kwargs["field_is_nullable"] = attrs["nullable"]
+			arcpy.management.AlterField(**kwargs)
 			applied += 1
 			logger.debug(
 				"apply_field_data_design: updated '%s.%s' attrs=%s",
@@ -180,7 +181,7 @@ def apply_field_data_design(
 				list(attrs.keys()),
 			)
 		except Exception as exc:
-			logger.debug(
+			logger.warning(
 				"apply_field_data_design: AlterField failed for '%s.%s': %s",
 				dataset_path,
 				field_name,
