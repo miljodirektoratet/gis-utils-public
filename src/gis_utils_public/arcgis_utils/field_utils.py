@@ -1,4 +1,9 @@
-"""Field helper functions shared across ArcGIS utility modules."""
+"""Field helper functions shared across ArcGIS utility modules.
+
+Public functions:
+- get_field_data_design: Read current field design (alias, type, length, nullable) from dataset.
+- apply_field_data_design: Apply field design changes to dataset. Only attributes present in input are updated.
+"""
 
 import re
 from typing import Any
@@ -92,3 +97,102 @@ def generate_field_alias(field_name: str) -> str:
 	alias = alias.replace("ae", "æ")
 	alias = alias.replace("oe", "ø")
 	return alias
+
+
+def get_field_data_design(dataset_path: str) -> dict[str, dict[str, Any]]:
+	"""Read current field design from dataset.
+
+	Returns alias, type, length and nullable for all non-system fields.
+
+	:param dataset_path: Full path to SDE table or feature class.
+	:return: Mapping of field_name to ``{alias, type, length, nullable}``. Empty dict if dataset not found.
+	"""
+	import arcpy
+
+	try:
+		fields = arcpy.ListFields(dataset_path)
+	except Exception:
+		return {}
+
+	if not fields:
+		return {}
+
+	result: dict[str, dict[str, Any]] = {}
+	for field in fields:
+		field_name = getattr(field, "name", None)
+		if not isinstance(field_name, str) or not field_name:
+			continue
+
+		if is_system_field(field):
+			continue
+
+		result[field_name] = {
+			"alias": getattr(field, "aliasName", field_name),
+			"type": getattr(field, "type", None),
+			"length": getattr(field, "length", None),
+			"nullable": getattr(field, "isNullable", None),
+		}
+
+	return result
+
+
+def apply_field_data_design(
+	dataset_path: str,
+	field_design: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+	"""Apply field design changes to dataset via AlterField.
+
+	Only attributes explicitly present in each field's dict are updated.
+	Omit an attribute to leave it unchanged on the dataset.
+
+	Supported attributes per field: ``alias``, ``length``, ``nullable``.
+	(``type`` cannot be changed via AlterField after field creation.)
+
+	:param dataset_path: Full path to SDE table or feature class.
+	:param field_design: Mapping of field_name to design dict.
+		Example: ``{"my_field": {"alias": "My Field", "nullable": False}}``
+	:return: Dictionary with ``applied``, ``attempted``, ``errors`` keys.
+	"""
+	import arcpy
+	import logging
+
+	logger = logging.getLogger(__name__)
+
+	applied = 0
+	attempted = 0
+	errors: list[dict[str, str]] = []
+
+	for field_name, attrs in field_design.items():
+		attempted += 1
+		try:
+			arcpy.management.AlterField(
+				in_table=dataset_path,
+				field=field_name,
+				new_field_alias=attrs.get("alias", "#") or "#",
+				new_field_length=attrs.get("length", "#") if attrs.get("length") is not None else "#",
+				new_field_is_nullable=attrs.get("nullable", "#") if attrs.get("nullable") is not None else "#",
+			)
+			applied += 1
+			logger.debug(
+				"apply_field_data_design: updated '%s.%s' attrs=%s",
+				dataset_path,
+				field_name,
+				list(attrs.keys()),
+			)
+		except Exception as exc:
+			logger.debug(
+				"apply_field_data_design: AlterField failed for '%s.%s': %s",
+				dataset_path,
+				field_name,
+				exc,
+			)
+			errors.append({
+				"field_name": field_name,
+				"error": str(exc),
+			})
+
+	return {
+		"applied": applied,
+		"attempted": attempted,
+		"errors": errors,
+	}
