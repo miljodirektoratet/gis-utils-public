@@ -22,20 +22,9 @@ def apply_sde_field_design(
 	field_alias_overrides: dict[str, str] | None = None,
 	field_design_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-	"""Apply field design to an SDE table or feature class using AlterFields.
+	"""Apply field design to an SDE table or feature class using AlterField.
 
-	Applies field aliases (auto-generated or from YAML config) and optionally
-	field type, length, and nullable when explicitly provided per field.
-
-	Parameter rules per field passed to ``arcpy.management.AlterFields``:
-
-	- ``new_field_name``: always ``#`` — fields are never renamed
-	- ``new_field_alias``: resolved alias from override or auto-generation
-	- ``new_field_type``: ``#`` unless present in ``field_design_overrides``
-	- ``new_field_length``: ``#`` unless present in ``field_design_overrides``
-	- ``new_field_is_nullable``: ``#`` unless present in ``field_design_overrides``
-	- ``clear_field_alias``: always ``false``
-
+	Applies field aliases (auto-generated or from YAML config) per field.
 	System fields (OID, Geometry, GlobalID, computed) are skipped.
 	Fields referenced in config that do not exist on the dataset are reported
 	in the ``missing`` list and skipped.
@@ -139,27 +128,36 @@ def apply_sde_field_design(
 			"errors": errors,
 		}
 
-	try:
-		arcpy.management.AlterFields(
-			in_table=dataset_path,
-			field_description=field_description,
-		)
-		changed = len(field_description)
-		LOGGER.debug(
-			"apply_sde_field_design: updated '%s' (changed=%s, skipped=%s, missing=%s)",
-			dataset_path,
-			changed,
-			len(skipped),
-			len(missing),
-		)
-	except Exception as exc:
-		LOGGER.warning(
-			"apply_sde_field_design: AlterFields failed for '%s': %s",
-			dataset_path,
-			exc,
-		)
-		errors.append({"dataset_path": dataset_path, "error": str(exc)})
-		changed = 0
+	changed = 0
+	for field_row in field_description:
+		field_name = field_row[0]
+		new_alias = field_row[2]
+
+		try:
+			arcpy.management.AlterField(
+				in_table=dataset_path,
+				field=field_name,
+				new_field_alias=new_alias,
+			)
+			changed += 1
+			LOGGER.debug(
+				"apply_sde_field_design: updated field '%s.%s' alias to '%s'",
+				dataset_path,
+				field_name,
+				new_alias,
+			)
+		except Exception as exc_field:
+			LOGGER.warning(
+				"apply_sde_field_design: AlterField failed for '%s.%s': %s",
+				dataset_path,
+				field_name,
+				exc_field,
+			)
+			errors.append({
+				"dataset_path": dataset_path,
+				"field_name": field_name,
+				"error": str(exc_field),
+			})
 
 	return {
 		"dataset_path": dataset_path,
