@@ -19,6 +19,7 @@ Public functions:
 
 import logging
 import os
+import re
 from typing import Any
 
 from .field_utils import (
