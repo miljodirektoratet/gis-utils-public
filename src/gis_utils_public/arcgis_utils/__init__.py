@@ -13,6 +13,7 @@ Available modules:
 - arcgispro_project_utils
 - arcgispro_map_utils
 - arcgispro_layer_utils
+- sde_utils
 """
 
 # ArcGIS-dependent utilities.
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
         arcgispro_layer_utils,
         arcgispro_map_utils,
         yaml_config_arcgis,
+        sde_utils,
         # module_1,  # Example for adding a new module
     )
 
@@ -50,6 +52,7 @@ __all__ = [
     "arcgispro_project_utils",
     "arcgispro_map_utils",
     "arcgispro_layer_utils",
+    "sde_utils",
     # "module_1",
 ]
 
