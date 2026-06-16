@@ -9,7 +9,7 @@ Public functions:
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
 - export_map_layers_to_lyrx: Export full layer definitions to LYRX files.
 - export_map_layers_to_lyrx_from_config: Export full layer definitions to LYRX files.
-- ensure_cim_field_descriptions: Init CIM field descriptions from source fields.
+- set_all_fields_visible: Set all configured layer fields to visible.
 - reorder_layer_fields: Reorder fields using config-first ordering.
 - set_only_fields_visible: Apply visibility from configured field list.
 - check_and_update_service_id: Check and update service layer id.
@@ -23,9 +23,6 @@ import re
 from typing import Any
 
 from .field_utils import (
-	generate_field_alias,
-	is_system_field,
-	normalize_field_alias_overrides,
 	normalize_field_name,
 )
 from .yaml_config_arcgis import (
@@ -36,7 +33,6 @@ from .yaml_config_arcgis import (
 LOGGER = logging.getLogger(__name__)
 
 
-# Use one result format for add layer in all cases.
 def _create_add_layer_from_sde_result(
 	layer_name: str,
 	sde_connection_path: str | None,
@@ -58,7 +54,6 @@ def _create_add_layer_from_sde_result(
 	}
 
 
-# Get existing layer names once so reruns do not add duplicates.
 def _get_existing_map_layer_names(map_obj: Any) -> set[str]:
 	"""Return case-insensitive set of existing layer and table names in map.
 
@@ -77,7 +72,6 @@ def _get_existing_map_layer_names(map_obj: Any) -> set[str]:
 	return existing_names
 
 
-# Use one result format for LYRX path checks.
 def _create_lyrx_path_resolution_result(
 	layer_name: str,
 	lyrx_dir: str,
@@ -104,7 +98,6 @@ def _create_lyrx_path_resolution_result(
 	}
 
 
-# Use one result format for apply LYRX.
 def _create_apply_lyrx_to_layer_result(
 	layer_name: str,
 	transfer_mode: str,
@@ -1014,131 +1007,6 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 	return [], "invalid_type"
 
 
-def ensure_cim_field_descriptions(
-	layer: Any,
-	set_visible: bool = True,
-	field_alias_overrides: dict[str, Any] | None = None,
-) -> tuple[bool, int, str]:
-	"""Initialize layer CIM field descriptions from source fields.
-
-	For feature layers: Uses CIM featureTable.fieldDescriptions.
-	For standalone tables: Uses arcpy.management.AlterField (CIM not fully supported).
-
-	:param layer: ArcGIS layer object or standalone table.
-	:param set_visible: Whether each new field should be visible (applies to layers only).
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Tuple ``(initialized, field_count, creation_path)``.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
-
-	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
-
-	if fields is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
-		return False, 0, "none"
-
-	if cim is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM definition)", layer_name)
-		return False, 0, "none"
-
-	cim_type_name = type(cim).__name__.lower()
-	if "standalonetable" in cim_type_name:
-		LOGGER.debug("ensure_cim_field_descriptions: standalone table detected for '%s'", layer_name)
-		from . import sde_utils
-
-		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
-
-	feature_table = getattr(cim, "featureTable", None)
-	if feature_table is None:
-		# Standalone tables don't have featureTable in CIM; use arcpy.management approach
-		LOGGER.debug("ensure_cim_field_descriptions: using arcpy.management.AlterField for '%s'", layer_name)
-		from . import sde_utils
-
-		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
-
-	# Prefer arcpy.cim factory when available, then fall back to CIM builder.
-	try:
-		import arcpy
-	except Exception:
-		arcpy = None
-
-	cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
-	builder = getattr(cim, "_arc_object", None)
-	if cim_module is None and builder is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM factory or builder)", layer_name)
-		return False, 0, "none"
-
-	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
-	rebuilt_descriptions = []
-	used_factory = False
-	used_builder = False
-	for field in fields:
-		if isinstance(field, dict):
-			field_name = field.get("name")
-			alias_name = field.get("aliasName")
-		else:
-			field_name = getattr(field, "name", None)
-			alias_name = getattr(field, "aliasName", None)
-		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
-		if not isinstance(field_name, str) or not field_name:
-			continue
-
-		fd = None
-		if cim_module is not None:
-			create_from_class_name = getattr(cim_module, "CreateCIMObjectFromClassName", None)
-			if callable(create_from_class_name):
-				try:
-					fd = create_from_class_name("CIMFieldDescription", "V3")
-					used_factory = True
-				except Exception as exc:
-					LOGGER.debug("ensure_cim_field_descriptions: CIM factory failed for '%s': %s", layer_name, exc)
-
-		if fd is None and builder is not None:
-			try:
-				fd = builder.createObject("CIMFieldDescription")
-				used_builder = True
-			except Exception as exc:
-				LOGGER.debug("ensure_cim_field_descriptions: CIM builder failed for '%s': %s", layer_name, exc)
-
-		if fd is None:
-			continue
-
-		resolved_alias = alias_name if isinstance(alias_name, str) else field_name
-		if not is_system_field(field):
-			resolved_alias = alias_overrides.get(
-				normalized_field_name,
-				generate_field_alias(field_name),
-			)
-
-		setattr(fd, "fieldName", field_name)
-		setattr(fd, "alias", resolved_alias)
-		setattr(fd, "visible", bool(set_visible))
-		rebuilt_descriptions.append(fd)
-
-	if not rebuilt_descriptions:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no field descriptions built)", layer_name)
-		return False, 0, "none"
-
-	if used_factory and used_builder:
-		creation_path = "mixed"
-	elif used_factory:
-		creation_path = "factory"
-	elif used_builder:
-		creation_path = "builder"
-	else:
-		creation_path = "none"
-
-	feature_table.fieldDescriptions = rebuilt_descriptions
-	layer.setDefinition(cim)
-	LOGGER.debug(
-		"ensure_cim_field_descriptions: updated '%s' (field_count=%s, creation_path=%s)",
-		layer_name,
-		len(rebuilt_descriptions),
-		creation_path,
-	)
-	return True, len(rebuilt_descriptions), creation_path
-
-
 def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | None:
 	"""Reorder layer fields by config-first then remaining alphabetical.
 
@@ -1202,6 +1070,110 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 		len(reordered_descriptions),
 	)
 	return len(reordered_descriptions)
+
+
+def set_all_fields_visible(layer: Any) -> tuple[int, int]:
+	"""Set all layer fields to visible.
+
+	:param layer: ArcGIS layer object.
+	:return: Tuple ``(made_visible, total_fields)``. When field descriptions are
+		initialized in this function, ``made_visible`` equals ``total_fields`` for
+		clear observability in pipeline summaries.
+	"""
+	layer_name = getattr(layer, "name", "<unknown>")
+	fields, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+	if fields is None or cim is None:
+		LOGGER.debug("set_all_fields_visible: skip '%s' (no fields available)", layer_name)
+		return 0, 0
+
+	# Build fieldDescriptions from field names when missing.
+	if not field_descriptions:
+		feature_table = getattr(cim, "featureTable", None)
+		if feature_table is None:
+			LOGGER.debug("set_all_fields_visible: skip '%s' (no featureTable on CIM)", layer_name)
+			return 0, 0
+
+		try:
+			import arcpy
+		except Exception:
+			arcpy = None
+
+		cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
+		builder = getattr(cim, "_arc_object", None)
+		if cim_module is None and builder is None:
+			LOGGER.debug(
+				"set_all_fields_visible: skip '%s' (no CIM factory or builder)",
+				layer_name,
+			)
+			return 0, 0
+
+		rebuilt_descriptions = []
+		for field in fields:
+			if isinstance(field, dict):
+				field_name = field.get("name")
+			else:
+				field_name = getattr(field, "name", None)
+			if not isinstance(field_name, str) or not field_name:
+				continue
+
+			fd = None
+			if cim_module is not None:
+				create_from_class_name = getattr(cim_module, "CreateCIMObjectFromClassName", None)
+				if callable(create_from_class_name):
+					try:
+						fd = create_from_class_name("CIMFieldDescription", "V3")
+					except Exception:
+						fd = None
+
+			if fd is None and builder is not None:
+				try:
+					fd = builder.createObject("CIMFieldDescription")
+				except Exception:
+					fd = None
+
+			if fd is None:
+				continue
+
+			setattr(fd, "fieldName", field_name)
+			# Do not set alias here; preserve source/SDE alias behavior.
+			setattr(fd, "visible", True)
+			rebuilt_descriptions.append(fd)
+
+		if not rebuilt_descriptions:
+			LOGGER.debug(
+				"set_all_fields_visible: skip '%s' (no field descriptions built)",
+				layer_name,
+			)
+			return 0, 0
+
+		feature_table.fieldDescriptions = rebuilt_descriptions
+		layer.setDefinition(cim)
+		initialized_count = len(rebuilt_descriptions)
+		LOGGER.debug(
+			"set_all_fields_visible: initialized '%s' (field_count=%s, made_visible=%s)",
+			layer_name,
+			initialized_count,
+			initialized_count,
+		)
+		return initialized_count, initialized_count
+
+	made_visible = 0
+	for field_description in field_descriptions:
+		current_visible = getattr(field_description, "visible", True)
+		if not current_visible:
+			field_description.visible = True
+			made_visible += 1
+
+	if made_visible > 0:
+		layer.setDefinition(cim)
+
+	LOGGER.debug(
+		"set_all_fields_visible: updated '%s' (made_visible=%s, total=%s)",
+		layer_name,
+		made_visible,
+		len(field_descriptions),
+	)
+	return made_visible, len(field_descriptions)
 
 
 def set_only_fields_visible(
@@ -1647,103 +1619,4 @@ def configure_popup_fields_from_visible(
 		return None, False, f"Could not set popupInfo from cols: {exc}"
 
 
-def normalize_sde_field_aliases(
-	dataset_path: str,
-	field_alias_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-	"""Normalize and update field aliases on one SDE dataset.
-
-	All non-system fields are evaluated. System fields (OID, geometry, GlobalID)
-	are skipped. Manual overrides from field_alias_overrides take precedence over
-	auto-generation.
-
-	:param dataset_path: Full path to SDE dataset or feature class.
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Summary dictionary with counts and changed fields.
-	"""
-	import arcpy
-
-	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
-	changes: list[dict[str, str]] = []
-	skipped: list[str] = []
-	errors: list[dict[str, str]] = []
-
-	try:
-		fields = arcpy.ListFields(dataset_path)
-	except Exception as exc:
-		return {
-			"dataset_path": dataset_path,
-			"exists": False,
-			"error": str(exc),
-			"fields_processed": 0,
-			"fields_changed": 0,
-			"fields_skipped": 0,
-			"fields_errored": 0,
-			"changes": [],
-			"skipped": [],
-			"errors": [],
-		}
-
-	if not fields:
-		return {
-			"dataset_path": dataset_path,
-			"exists": True,
-			"error": None,
-			"fields_processed": 0,
-			"fields_changed": 0,
-			"fields_skipped": 0,
-			"fields_errored": 0,
-			"changes": [],
-			"skipped": [],
-			"errors": [],
-		}
-
-	for field in fields:
-		field_name = getattr(field, "name", None)
-		if not isinstance(field_name, str):
-			continue
-
-		if is_system_field(field):
-			skipped.append(field_name)
-			continue
-
-		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
-		resolved_alias = alias_overrides.get(
-			normalized_field_name,
-			generate_field_alias(field_name),
-		)
-
-		current_alias = getattr(field, "aliasName", field_name)
-		if current_alias == resolved_alias:
-			continue
-
-		try:
-			arcpy.management.AlterField(
-				dataset_path,
-				field_name,
-				new_field_alias=resolved_alias,
-			)
-			changes.append({
-				"field_name": field_name,
-				"old_alias": current_alias,
-				"new_alias": resolved_alias,
-			})
-		except Exception as exc:
-			errors.append({
-				"field_name": field_name,
-				"error": str(exc),
-			})
-
-	return {
-		"dataset_path": dataset_path,
-		"exists": True,
-		"error": None,
-		"fields_processed": len(fields),
-		"fields_changed": len(changes),
-		"fields_skipped": len(skipped),
-		"fields_errored": len(errors),
-		"changes": changes,
-		"skipped": skipped,
-		"errors": errors,
-	}
 
