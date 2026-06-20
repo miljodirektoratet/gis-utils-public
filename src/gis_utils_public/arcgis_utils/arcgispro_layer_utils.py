@@ -1086,76 +1086,68 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 		LOGGER.debug("set_all_fields_visible: skip '%s' (no fields available)", layer_name)
 		return 0, 0
 
-	# Build fieldDescriptions from field names when missing.
-	if not field_descriptions:
-		feature_table = getattr(cim, "featureTable", None)
-		if feature_table is None:
-			LOGGER.debug("set_all_fields_visible: skip '%s' (no featureTable on CIM)", layer_name)
-			return 0, 0
+	feature_table = getattr(cim, "featureTable", None)
+	if feature_table is None:
+		LOGGER.debug("set_all_fields_visible: skip '%s' (no featureTable on CIM)", layer_name)
+		return 0, 0
 
-		try:
-			import arcpy
-		except Exception:
-			arcpy = None
+	source_field_names = {
+		normalize_field_name(field.get("name") if isinstance(field, dict) else getattr(field, "name", None))
+		for field in fields
+	}
+	source_field_names.discard("")
 
-		cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
-		builder = getattr(cim, "_arc_object", None)
-		if cim_module is None and builder is None:
-			LOGGER.debug(
-				"set_all_fields_visible: skip '%s' (no CIM factory or builder)",
-				layer_name,
-			)
-			return 0, 0
-
-		rebuilt_descriptions = []
-		for field in fields:
-			if isinstance(field, dict):
-				field_name = field.get("name")
-			else:
-				field_name = getattr(field, "name", None)
-			if not isinstance(field_name, str) or not field_name:
-				continue
-
-			fd = None
-			if cim_module is not None:
-				create_from_class_name = getattr(cim_module, "CreateCIMObjectFromClassName", None)
-				if callable(create_from_class_name):
-					try:
-						fd = create_from_class_name("CIMFieldDescription", "V3")
-					except Exception:
-						fd = None
-
-			if fd is None and builder is not None:
-				try:
-					fd = builder.createObject("CIMFieldDescription")
-				except Exception:
-					fd = None
-
-			if fd is None:
-				continue
-
-			setattr(fd, "fieldName", field_name)
-			# Do not set alias here; preserve source/SDE alias behavior.
-			setattr(fd, "visible", True)
-			rebuilt_descriptions.append(fd)
-
-		if not rebuilt_descriptions:
-			LOGGER.debug(
-				"set_all_fields_visible: skip '%s' (no field descriptions built)",
-				layer_name,
-			)
-			return 0, 0
-
-		feature_table.fieldDescriptions = rebuilt_descriptions
-		layer.setDefinition(cim)
-		initialized_count = len(rebuilt_descriptions)
-		LOGGER.debug(
-			"set_all_fields_visible: initialized '%s' (field_count=%s, made_visible=%s)",
-			layer_name,
-			initialized_count,
-			initialized_count,
+	current_descriptions = list(field_descriptions or [])
+	current_field_names = {
+		normalize_field_name(
+			getattr(field_description, "fieldName", None)
+			or getattr(field_description, "name", None)
 		)
-		return initialized_count, initialized_count
+		for field_description in current_descriptions
+	}
+	current_field_names.discard("")
+
+	if not current_descriptions or current_field_names != source_field_names:
+		# Prefer resetting field descriptions to let ArcGIS repopulate from source,
+		# which preserves aliases driven by SDE/source metadata.
+		try:
+			feature_table.fieldDescriptions = None
+			layer.setDefinition(cim)
+		except Exception:
+			pass
+
+		_, refreshed_cim, refreshed_descriptions = _get_layer_fields_and_descriptions(layer)
+		refreshed_field_names = {
+			normalize_field_name(
+				getattr(field_description, "fieldName", None)
+				or getattr(field_description, "name", None)
+			)
+			for field_description in list(refreshed_descriptions or [])
+		}
+		refreshed_field_names.discard("")
+
+		if refreshed_descriptions and refreshed_field_names == source_field_names:
+			cim = refreshed_cim
+			field_descriptions = list(refreshed_descriptions)
+			LOGGER.debug(
+				"set_all_fields_visible: refreshed '%s' from source (field_count=%s)",
+				layer_name,
+				len(field_descriptions),
+			)
+		else:
+			# Do not synthesize fieldDescriptions in code.
+			# Keep ArcGIS/SDE-sourced descriptions only, even when incomplete.
+			cim = refreshed_cim if refreshed_cim is not None else cim
+			field_descriptions = list(refreshed_descriptions or [])
+			LOGGER.warning(
+				"set_all_fields_visible: source refresh for '%s' did not fully match datasource fields (source=%s, refreshed=%s). No synthetic field descriptions were created.",
+				layer_name,
+				len(source_field_names),
+				len(refreshed_field_names),
+			)
+
+	if not isinstance(field_descriptions, list):
+		field_descriptions = list(field_descriptions or [])
 
 	made_visible = 0
 	for field_description in field_descriptions:
