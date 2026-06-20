@@ -1146,6 +1146,10 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 			if not isinstance(field_name, str) or not field_name:
 				continue
 			field_alias = default_alias_by_name.get(normalize_field_name(field_name) or "")
+			if not isinstance(field_alias, str) or not field_alias.strip():
+				field_alias = (
+					field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
+				)
 
 			fd = None
 			if cim_module is not None:
