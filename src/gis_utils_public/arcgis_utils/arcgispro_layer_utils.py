@@ -1117,15 +1117,35 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 	current_names.discard(None)
 	current_names.discard("")
 
+	original_description_snapshot = [
+		{
+			"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
+			"fieldAlias": getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None),
+		}
+		for fd in current_descriptions
+	]
+
+	default_alias_by_name: dict[str, str] = {}
+	for fd in current_descriptions:
+		normalized_name = normalize_field_name(
+			getattr(fd, "fieldName", None) or getattr(fd, "name", None)
+		)
+		if not normalized_name:
+			continue
+		default_alias = getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None)
+		if isinstance(default_alias, str) and default_alias.strip():
+			default_alias_by_name[normalized_name] = default_alias
+
 	if not current_descriptions or current_names != source_names:
 		# fieldDescriptions are missing or were trimmed (e.g. by ApplySymbologyFromLayer).
-		# Rebuild from datasource fields. Only fieldName and visible are set;
-		# alias is intentionally omitted so ArcGIS resolves it from SDE.
+		# Rebuild from datasource fields. Keep alias only when it exists in
+		# current CIM field descriptions (no fallback values).
 		rebuilt: list[Any] = []
 		for field in fields:
 			field_name = field.get("name") if isinstance(field, dict) else getattr(field, "name", None)
 			if not isinstance(field_name, str) or not field_name:
 				continue
+			field_alias = default_alias_by_name.get(normalize_field_name(field_name) or "")
 
 			fd = None
 			if cim_module is not None:
@@ -1144,12 +1164,28 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 				continue
 
 			setattr(fd, "fieldName", field_name)
+			if isinstance(field_alias, str) and field_alias.strip():
+				setattr(fd, "fieldAlias", field_alias)
 			setattr(fd, "visible", True)
 			rebuilt.append(fd)
 
 		if not rebuilt:
 			LOGGER.debug("set_all_fields_visible: skip '%s' (could not build field descriptions)", layer_name)
 			return 0, 0
+
+		rebuilt_description_snapshot = [
+			{
+				"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
+				"fieldAlias": getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None),
+			}
+			for fd in rebuilt
+		]
+		LOGGER.debug(
+			"set_all_fields_visible: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
+			layer_name,
+			original_description_snapshot,
+			rebuilt_description_snapshot,
+		)
 
 		feature_table.fieldDescriptions = rebuilt
 		layer.setDefinition(cim)
