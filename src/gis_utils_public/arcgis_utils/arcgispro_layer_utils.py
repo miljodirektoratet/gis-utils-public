@@ -1618,6 +1618,9 @@ def set_cim_popup_info_fields_by_yml(
 	shows ``<display field alias>: {display_field_name}``.
 
 	Matches ArcGIS Server REST API expectations for popup configuration.
+	Note that popup field order is only visible in ArcGIS Pro and not reflected when published as Map Server or Feature Server 
+	Instead publish as Hosted featuer layer to AGOL to maintain field order in popup. See Esri support article for details:
+	https://support.esri.com/en-us/knowledge-base/problem-pop-up-configuration-from-arcgis-pro-is-not-ret-000034868
 
 	:param layer: ArcGIS layer object.
 	:param popup_title_override: Optional configured popup title override.
