@@ -3,7 +3,7 @@
 Public functions:
 - construct_sde_dataset_path: Build dataset path candidates from layer config.
 - add_layer_from_sde: Add one layer from SDE source.
-- add_layers_from_config_sde_to_map: Add YAML-configured layers from SDE to map.
+- add_sde_layers_and_tables_from_yml_to_map: Add YAML-configured layers/tables from SDE to map.
 - resolve_lyrx_path: Resolve LYRX path for one layer.
 - apply_lyrx_to_layer: Apply LYRX transfer to a map layer.
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
@@ -200,7 +200,7 @@ def add_layer_from_sde(
 		return result
 
 
-def add_layers_from_config_sde_to_map(
+def add_sde_layers_and_tables_from_yml_to_map(
 	map_obj: Any,
 	service_def_config: dict[str, Any],
 	infrastructure_config: dict[str, Any] | None = None,
@@ -208,7 +208,7 @@ def add_layers_from_config_sde_to_map(
 	access_mode: str = "read",
 	fallback_sde_path: str | None = None,
 ) -> dict[str, Any]:
-	"""Add all YAML-defined layers from SDE to the target map.
+	"""Add all YAML-defined layers/tables from SDE to the target map.
 
 	:param map_obj: ArcGIS Pro map object.
 	:param service_def_config: Full map service definition config dictionary.
@@ -222,7 +222,7 @@ def add_layers_from_config_sde_to_map(
 	results: list[dict[str, Any]] = []
 	existing_layer_names = _get_existing_map_layer_names(map_obj)
 
-	LOGGER.info("Add layers from SDE in config order")
+	LOGGER.info("Add layers/tables from SDE in config order")
 
 	for layer_name, layer_config in layer_entries:
 		normalized_layer_name = layer_name.strip().casefold()
@@ -277,7 +277,7 @@ def add_layers_from_config_sde_to_map(
 	added_count = sum(1 for result in results if bool(result.get("added")))
 	skipped_count = sum(1 for result in results if bool(result.get("skipped")))
 	LOGGER.info(
-		"-> Added %d/%d layer(s) to map (skipped existing: %d)",
+		"-> Added %d/%d layer/table entry(ies) to map (skipped existing: %d)",
 		added_count,
 		len(layer_entries),
 		skipped_count,
