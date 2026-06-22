@@ -43,7 +43,6 @@ def set_map_metadata_from_config(
         if map_metadata_cfg.get("license"):
             md.accessConstraints = map_metadata_cfg.get("license")
         map_obj.metadata = md
-        LOGGER.debug("Map metadata updated from config.")
     except Exception as exc:
         LOGGER.error("Failed to set metadata: %s", exc)
 
@@ -67,7 +66,6 @@ def enable_unique_numeric_ids(map_obj: Any) -> bool:
 
         map_cim.useServiceLayerIDs = True
         map_obj.setDefinition(map_cim)
-        LOGGER.debug("Unique numeric IDs enabled via 'useServiceLayerIDs'.")
         return True
     except Exception as exc:
         LOGGER.error("Failed to enable unique numeric IDs: %s", exc)

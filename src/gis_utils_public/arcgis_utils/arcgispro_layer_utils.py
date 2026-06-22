@@ -796,7 +796,7 @@ def export_map_layers_to_lyrx(
 		except Exception as exc:
 			_append_result(layer_name, lyrx_path, False, False, str(exc), "export_failed")
 
-	LOGGER.info(
+	LOGGER.debug(
 		"Export map layers to LYRX (lyrx_dir=%s, suffix=%s, overwrite=%s)",
 		resolved_lyrx_dir,
 		suffix,
