@@ -24,6 +24,7 @@ import re
 from typing import Any
 
 from .field_utils import (
+	generate_field_alias,
 	normalize_field_name,
 )
 from .yaml_config_arcgis import (
@@ -1178,27 +1179,23 @@ def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, 
 		for fd in current_descriptions
 	]
 
-	default_alias_by_name: dict[str, str] = {}
-	for fd in current_descriptions:
-		normalized_name = normalize_field_name(
-			getattr(fd, "fieldName", None) or getattr(fd, "name", None)
-		)
-		if not normalized_name:
-			continue
-		default_alias = getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None)
-		if isinstance(default_alias, str) and default_alias.strip():
-			default_alias_by_name[normalized_name] = default_alias
-
 	# Always rebuild from datasource to ensure all SDE fields are present.
 	rebuilt: list[Any] = []
 	for field in fields:
 		field_name = field.get("name") if isinstance(field, dict) else getattr(field, "name", None)
 		if not isinstance(field_name, str) or not field_name:
 			continue
-		field_alias = default_alias_by_name.get(normalize_field_name(field_name) or "")
+		# Source of truth for alias should be SDE field alias.
+		field_alias = (
+			field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
+		)
 		if not isinstance(field_alias, str) or not field_alias.strip():
-			field_alias = (
-				field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
+			field_alias = generate_field_alias(field_name)
+			LOGGER.warning(
+				"set_cim_feature_table_field_descriptions_from_sde: missing SDE alias for layer '%s' field '%s'; regenerated alias '%s'",
+				layer_name,
+				field_name,
+				field_alias,
 			)
 
 		fd = None
@@ -1218,8 +1215,9 @@ def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, 
 			continue
 
 		setattr(fd, "fieldName", field_name)
-		if isinstance(field_alias, str) and field_alias.strip():
-			setattr(fd, "alias", field_alias)
+		setattr(fd, "alias", field_alias)
+		# Keep both properties aligned since ArcGIS may expose either alias or fieldAlias.
+		setattr(fd, "fieldAlias", field_alias)
 		setattr(fd, "visible", True)
 		rebuilt.append(fd)
 
