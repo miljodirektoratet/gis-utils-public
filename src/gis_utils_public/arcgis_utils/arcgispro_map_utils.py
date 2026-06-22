@@ -43,7 +43,7 @@ def set_map_metadata_from_config(
         if map_metadata_cfg.get("license"):
             md.accessConstraints = map_metadata_cfg.get("license")
         map_obj.metadata = md
-        LOGGER.info("Map metadata updated from config.")
+        LOGGER.debug("Map metadata updated from config.")
     except Exception as exc:
         LOGGER.error("Failed to set metadata: %s", exc)
 

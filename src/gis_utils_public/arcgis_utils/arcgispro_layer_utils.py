@@ -277,7 +277,7 @@ def add_sde_layers_and_tables_from_yml_to_map(
 
 	added_count = sum(1 for result in results if bool(result.get("added")))
 	skipped_count = sum(1 for result in results if bool(result.get("skipped")))
-	LOGGER.info(
+	LOGGER.debug(
 		"-> Added %d/%d layer/table entry(ies) to map (skipped existing: %d)",
 		added_count,
 		len(layer_entries),
