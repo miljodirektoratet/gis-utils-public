@@ -571,11 +571,11 @@ def apply_lyrx_to_layer(
 				target_layer.showLabels = source_layer.showLabels
 
 			if hasattr(source_cim, "labelClasses") and hasattr(target_cim, "labelClasses"):
-				setattr(target_cim, "labelClasses", getattr(source_cim, "labelClasses"))
+				target_cim.labelClasses = getattr(source_cim, "labelClasses")
 				changed_cim = True
 
 			if hasattr(source_cim, "popupInfo") and hasattr(target_cim, "popupInfo"):
-				setattr(target_cim, "popupInfo", getattr(source_cim, "popupInfo"))
+				target_cim.popupInfo = getattr(source_cim, "popupInfo")
 				changed_cim = True
 
 			source_ft = getattr(source_cim, "featureTable", None)
@@ -584,7 +584,7 @@ def apply_lyrx_to_layer(
 				if hasattr(source_ft, "htmlPopupInfo") and hasattr(
 					target_ft, "htmlPopupInfo"
 				):
-					setattr(target_ft, "htmlPopupInfo", getattr(source_ft, "htmlPopupInfo"))
+					target_ft.htmlPopupInfo = getattr(source_ft, "htmlPopupInfo")
 					changed_cim = True
 
 			if changed_cim:
@@ -1235,11 +1235,11 @@ def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, 
 		if fd is None:
 			continue
 
-		setattr(fd, "fieldName", field_name)
-		setattr(fd, "alias", field_alias)
+		fd.fieldName = field_name
+		fd.alias = field_alias
 		# Keep both properties aligned since ArcGIS may expose either alias or fieldAlias.
-		setattr(fd, "fieldAlias", field_alias)
-		setattr(fd, "visible", True)
+		fd.fieldAlias = field_alias
+		fd.visible = True
 		rebuilt.append(fd)
 
 	if not rebuilt:
@@ -1392,7 +1392,7 @@ def set_cim_layer_definition_visibility(
 			LOGGER.debug("set_cim_layer_definition_visibility: '%s' visibility=%s (no change needed)", item_name, current_visible)
 			return True, False, f"visibility={current_visible}"
 
-		setattr(item_cim, "visibility", expected_visible)
+		item_cim.visibility = expected_visible
 		item.setDefinition(item_cim)
 		LOGGER.debug("set_cim_layer_definition_visibility: '%s' visibility=%s (updated)", item_name, expected_visible)
 		return False, True, f"visibility={expected_visible}"
@@ -1454,6 +1454,7 @@ def check_and_update_definition_query(
 			if current_query == desired_query:
 				return True, False, current_query
 
+			# setattr() required here because attr_name is dynamic (definitionExpression or definitionQuery)
 			setattr(item_cim, attr_name, desired_query)
 			item.setDefinition(item_cim)
 			return False, True, desired_query
@@ -1521,6 +1522,7 @@ def set_cim_layer_definition_service_id(layer: Any, expected_service_id: Any) ->
 			LOGGER.debug("set_cim_layer_definition_service_id: already correct for '%s' (%s)", layer_name, current_id)
 			return True, False
 
+		# setattr() required here because target_attr is dynamic (serviceLayerID or serviceTableID)
 		setattr(layer_cim, target_attr, expected_id)
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
@@ -1590,7 +1592,7 @@ def set_cim_feature_table_display_field(
 			)
 			return True, False, resolved_field_name
 
-		setattr(feature_table, "displayField", resolved_field_name)
+		feature_table.displayField = resolved_field_name
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
 			"set_cim_feature_table_display_field: updated '%s' (%s)",
@@ -1773,10 +1775,11 @@ def set_cim_popup_info_fields_by_yml(
 		popup_field_descriptions = []
 		for field_name in ordered_popup_fields:
 			popup_field_description = popup_field_description_factory()
-			setattr(popup_field_description, "fieldName", field_name)
+			# Use direct assignment, not setattr() - CIM objects require this to persist values
+			popup_field_description.fieldName = field_name
 			field_alias = ordered_popup_alias_by_name.get(field_name)
 			if isinstance(field_alias, str):
-				setattr(popup_field_description, "alias", field_alias)
+				popup_field_description.alias = field_alias
 			popup_field_descriptions.append(popup_field_description)
 		popup_info.fieldDescriptions = popup_field_descriptions
 
