@@ -1608,22 +1608,13 @@ def set_cim_feature_table_display_field(
 def set_cim_popup_info_fields_by_yml(
 	layer: Any,
 ) -> tuple[Any, bool, str]:
-	"""Configure popup to inherit visible fields from the layer and show the display field as title.
+	"""Configure popup with visible fields and display field as title.
 
-	Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` so the popup
-	automatically reflects the field order and visibility already configured on
-	``featureTable.fieldDescriptions`` by the preceding pipeline stages. The popup
-	title is set from ``featureTable.displayField`` using ArcGIS popup title
-	syntax ``{field_name}``.
+	Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` and populates the
+	``fields`` array with all visible field names from ``featureTable.fieldDescriptions``.
+	The popup title is set using field reference syntax ``{displayFieldName}``.
 
-	This avoids duplicating field ordering logic here. Popup field order and
-	visibility are fully driven by ``featureTable.fieldDescriptions``, which is
-	set and ordered by ``set_cim_feature_table_field_descriptions_from_sde``,
-	``order_cim_feature_table_field_descriptions_by_yml``, and
-	``set_cim_feature_table_field_descriptions_visibility_by_yml``.
-
-	Spec references:
-	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMPopup.md#cimtablemediainfo
+	Matches ArcGIS Server REST API expectations for popup configuration.
 
 	:param layer: ArcGIS layer object.
 	:return: Tuple ``(is_correct, was_updated, info_message)`` where:
@@ -1642,8 +1633,21 @@ def set_cim_popup_info_fields_by_yml(
 	try:
 		layer_cim = layer.getDefinition("V3")
 		feature_table = getattr(layer_cim, "featureTable", None)
+		
+		# Get display field name and build title syntax
 		display_field_name = getattr(feature_table, "displayField", None) if feature_table is not None else None
 		expected_title = f"{{{display_field_name}}}" if isinstance(display_field_name, str) and display_field_name.strip() else ""
+		
+		# Extract visible field names from featureTable.fieldDescriptions
+		visible_field_names = []
+		if feature_table is not None:
+			field_descs = getattr(feature_table, "fieldDescriptions", None)
+			if isinstance(field_descs, list):
+				for field_desc in field_descs:
+					is_visible = getattr(field_desc, "visible", False)
+					field_name = getattr(field_desc, "fieldName", None)
+					if is_visible and isinstance(field_name, str) and field_name.strip():
+						visible_field_names.append(field_name)
 
 		# Check if already configured correctly
 		current_popup = getattr(layer_cim, "popupInfo", None)
@@ -1652,17 +1656,19 @@ def set_cim_popup_info_fields_by_yml(
 			if isinstance(current_media, list) and current_media:
 				current_use_layer_fields = getattr(current_media[0], "useLayerFields", None)
 				current_title = getattr(current_popup, "title", None)
-				if current_use_layer_fields is True and current_title == expected_title:
+				current_fields = getattr(current_media[0], "fields", None)
+				if (current_use_layer_fields is True and 
+					current_title == expected_title and 
+					current_fields == visible_field_names):
 					LOGGER.debug(
-						"set_cim_popup_info_fields_by_yml: already correct for '%s' (useLayerFields=True, title=%r)",
+						"set_cim_popup_info_fields_by_yml: already correct for '%s' (useLayerFields=True, title=%r, %d fields)",
 						layer_name,
 						expected_title,
+						len(visible_field_names),
 					)
-					return True, False, f"Popup uses layer fields with title {expected_title!r}"
+					return True, False, f"Popup configured with {len(visible_field_names)} visible fields"
 
-		# Build a CIMTableMediaInfo with useLayerFields=True.
-		# This delegates popup field order and visibility to featureTable.fieldDescriptions,
-		# which is already configured by the preceding layer pipeline stages.
+		# Build CIMTableMediaInfo with useLayerFields=True and explicit fields array
 		popup_ns = getattr(cim_module, "CIMPopup", None)
 		if popup_ns is not None and hasattr(popup_ns, "CIMTableMediaInfo") and hasattr(popup_ns, "CIMPopupInfo"):
 			table_media = popup_ns.CIMTableMediaInfo()
@@ -1671,8 +1677,13 @@ def set_cim_popup_info_fields_by_yml(
 			table_media = cim_module.CreateCIMObjectFromClassName("CIMTableMediaInfo", "V3")
 			popup_info = current_popup or cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
 
-		# Use direct assignment, not setattr() - CIM objects require this to persist values
+		# Configure popup with visible fields and double-brace title
+		empty_html = "<div><p><span></span></p></div>"
 		table_media.useLayerFields = True
+		table_media.fields = visible_field_names
+		table_media.caption = empty_html
+		table_media.title = empty_html
+		
 		popup_info.mediaInfos = [table_media]
 		popup_info.title = expected_title
 		popup_info.showTitle = bool(expected_title)
@@ -1680,14 +1691,16 @@ def set_cim_popup_info_fields_by_yml(
 		layer_cim.popupInfo = popup_info
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"set_cim_popup_info_fields_by_yml: updated '%s' (useLayerFields=True, title=%r)",
+			"set_cim_popup_info_fields_by_yml: updated '%s' (useLayerFields=True, title=%r, %d fields)",
 			layer_name,
 			expected_title,
+			len(visible_field_names),
 		)
-		return False, True, f"Popup uses layer fields with title {expected_title!r}"
+		return False, True, f"Popup configured with {len(visible_field_names)} visible fields, title {expected_title!r}"
 	except Exception as exc:
 		LOGGER.warning("set_cim_popup_info_fields_by_yml: failed for '%s': %s", layer_name, exc)
 		return None, False, f"Could not set popupInfo: {exc}"
+
 
 
 
