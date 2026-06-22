@@ -15,7 +15,7 @@ Public functions:
 - set_cim_layer_definition_visibility: Set CIM layer/table visibility from config.
 - set_cim_layer_definition_service_id: Check and update service layer id.
 - set_cim_feature_table_display_field: Configure display field from layer config.
-- set_cim_popup_info_fields_by_yml: Configure popup fields from visible config.
+- set_cim_popup_info_fields_by_yml: Configure popup to inherit visible fields from layer (useLayerFields=True).
 """
 
 import logging
@@ -1607,69 +1607,30 @@ def set_cim_feature_table_display_field(
 
 def set_cim_popup_info_fields_by_yml(
 	layer: Any,
-	visible_field_names: list[str],
 ) -> tuple[Any, bool, str]:
-	"""Set popup field ordering from YAML ``cols`` into layer CIM popup structures.
+	"""Configure popup to inherit visible fields from the layer (useLayerFields=True).
 
-	This function writes popup ordering to both relevant CIM popup paths:
-	- ``CIMPopupInfo.mediaInfos[].fields`` (table media field sequence)
-	- ``CIMPopupInfo.fieldDescriptions`` (``CIMPopupFieldDescription`` sequence)
+	Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` so the popup
+	automatically reflects the field order and visibility already configured on
+	``featureTable.fieldDescriptions`` by the preceding pipeline stages.
 
-	Ordering behavior:
-	- Start from configured ``visible_field_names`` (typically YAML ``cols``).
-	- Resolve to actual layer field names and remove duplicates.
-	- Mirror order from ``featureTable.fieldDescriptions`` for matching fields.
-	- Append any configured fields missing from ``featureTable.fieldDescriptions``.
-
-	Alias behavior:
-	- ``CIMPopupFieldDescription.alias`` is copied from corresponding
-	  ``featureTable.fieldDescriptions`` (``alias``/``fieldAlias``) when available.
-	- ``mediaInfos[].useLayerFields`` is set to ``False`` to enforce explicit
-	  field sequencing.
+	This avoids duplicating field ordering logic here. Popup field order and
+	visibility are fully driven by ``featureTable.fieldDescriptions``, which is
+	set and ordered by ``set_cim_feature_table_field_descriptions_from_sde``,
+	``order_cim_feature_table_field_descriptions_by_yml``, and
+	``set_cim_feature_table_field_descriptions_visibility_by_yml``.
 
 	Spec references:
-	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMPopup.md#cimpopupinfo
-	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMPopup.md#cimpopupfielddescription
+	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMPopup.md#cimtablemediainfo
 
 	:param layer: ArcGIS layer object.
-	:param visible_field_names: Ordered configured field names (YAML ``cols``).
 	:return: Tuple ``(is_correct, was_updated, info_message)`` where:
-		- ``is_correct`` indicates whether popup order already matched,
+		- ``is_correct`` indicates whether popup was already configured correctly,
 		- ``was_updated`` indicates whether CIM was written,
 		- ``info_message`` provides a short status summary.
 	"""
 	import arcpy
 	layer_name = getattr(layer, "name", "<unknown>")
-
-	if not isinstance(visible_field_names, list) or not visible_field_names:
-		LOGGER.debug("set_cim_popup_info_fields_by_yml: skip '%s' (no cols configured)", layer_name)
-		return None, False, "No cols configured"
-
-	normalized_requested: list[str] = []
-	seen: set[str] = set()
-	for name in visible_field_names:
-		normalized = normalize_field_name(name)
-		if normalized and normalized not in seen:
-			seen.add(normalized)
-			normalized_requested.append(normalized)
-
-	if not normalized_requested:
-		LOGGER.debug("set_cim_popup_info_fields_by_yml: skip '%s' (no valid cols)", layer_name)
-		return None, False, "No valid field names in cols"
-
-	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
-	if error_message:
-		LOGGER.warning("set_cim_popup_info_fields_by_yml: field lookup failed for '%s': %s", layer_name, error_message)
-		return None, False, error_message
-
-	popup_fields = [
-		available_by_normalized[name]
-		for name in normalized_requested
-		if name in available_by_normalized
-	]
-	if not popup_fields:
-		LOGGER.debug("set_cim_popup_info_fields_by_yml: no fields found for '%s' from configured cols", layer_name)
-		return None, False, "No configured cols fields were found in layer"
 
 	cim_module = getattr(arcpy, "cim", None)
 	if cim_module is None:
@@ -1678,157 +1639,39 @@ def set_cim_popup_info_fields_by_yml(
 
 	try:
 		layer_cim = layer.getDefinition("V3")
-		feature_table = getattr(layer_cim, "featureTable", None)
-		feature_descriptions = (
-			getattr(feature_table, "fieldDescriptions", None)
-			if feature_table is not None
-			else None
-		)
 
-		def _popup_field_description_snapshot(field_descriptions: Any) -> list[dict[str, Any]]:
-			"""Return a readable snapshot for popup field descriptions."""
-			snapshot: list[dict[str, Any]] = []
-			if not isinstance(field_descriptions, list):
-				return snapshot
-			for item in field_descriptions:
-				snapshot.append(
-					{
-						"fieldName": getattr(item, "fieldName", None) or getattr(item, "name", None),
-						"alias": getattr(item, "alias", None),
-						"fieldAlias": getattr(item, "fieldAlias", None),
-					}
-				)
-			return snapshot
+		# Check if already configured correctly
+		current_popup = getattr(layer_cim, "popupInfo", None)
+		if current_popup is not None:
+			current_media = getattr(current_popup, "mediaInfos", None)
+			if isinstance(current_media, list) and current_media:
+				current_use_layer_fields = getattr(current_media[0], "useLayerFields", None)
+				if current_use_layer_fields is True:
+					LOGGER.debug("set_cim_popup_info_fields_by_yml: already correct for '%s' (useLayerFields=True)", layer_name)
+					return True, False, "Popup set to use layer fields"
 
-		# Build popup field sequence from featureTable.fieldDescriptions so popup
-		# name/alias/order mirrors layer field metadata as closely as possible.
-		requested_normalized_set = {
-			normalize_field_name(field_name)
-			for field_name in popup_fields
-			if normalize_field_name(field_name)
-		}
-		ordered_popup_fields: list[str] = []
-		ordered_popup_alias_by_name: dict[str, str] = {}
-		seen_popup_names: set[str] = set()
-
-		if isinstance(feature_descriptions, list):
-			for field_description in feature_descriptions:
-				raw_name = getattr(field_description, "fieldName", None) or getattr(
-					field_description,
-					"name",
-					None,
-				)
-				normalized_name = normalize_field_name(raw_name)
-				if not normalized_name or normalized_name not in requested_normalized_set:
-					continue
-				resolved_name = available_by_normalized.get(normalized_name) or raw_name
-				if not isinstance(resolved_name, str) or not resolved_name:
-					continue
-				if resolved_name in seen_popup_names:
-					continue
-
-				ordered_popup_fields.append(resolved_name)
-				seen_popup_names.add(resolved_name)
-
-				alias_value = getattr(field_description, "alias", None) or getattr(
-					field_description,
-					"fieldAlias",
-					None,
-				)
-				if isinstance(alias_value, str):
-					ordered_popup_alias_by_name[resolved_name] = alias_value
-
-		# Add any configured popup fields missing in feature descriptions.
-		for field_name in popup_fields:
-			if field_name not in seen_popup_names:
-				ordered_popup_fields.append(field_name)
-				seen_popup_names.add(field_name)
-
+		# Build a CIMTableMediaInfo with useLayerFields=True.
+		# This delegates popup field order and visibility to featureTable.fieldDescriptions,
+		# which is already configured by the preceding layer pipeline stages.
 		popup_ns = getattr(cim_module, "CIMPopup", None)
-		popup_field_description_factory: Any = None
-		if (
-			popup_ns is not None
-			and hasattr(popup_ns, "CIMTableMediaInfo")
-			and hasattr(popup_ns, "CIMPopupInfo")
-		):
+		if popup_ns is not None and hasattr(popup_ns, "CIMTableMediaInfo") and hasattr(popup_ns, "CIMPopupInfo"):
 			table_media = popup_ns.CIMTableMediaInfo()
-			popup_info = getattr(layer_cim, "popupInfo", None) or popup_ns.CIMPopupInfo()
-			popup_field_description_factory = (
-				popup_ns.CIMPopupFieldDescription
-				if hasattr(popup_ns, "CIMPopupFieldDescription")
-				else None
-			)
+			popup_info = current_popup or popup_ns.CIMPopupInfo()
 		else:
 			table_media = cim_module.CreateCIMObjectFromClassName("CIMTableMediaInfo", "V3")
-			popup_info = getattr(layer_cim, "popupInfo", None) or cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
-			popup_field_description_factory = None
+			popup_info = current_popup or cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
 
-		if popup_field_description_factory is None:
-			popup_field_description_factory = lambda: cim_module.CreateCIMObjectFromClassName(
-				"CIMPopupFieldDescription", "V3"
-			)
-
-		table_media.fields = ordered_popup_fields
-		table_media.useLayerFields = False
+		# Use direct assignment, not setattr() - CIM objects require this to persist values
+		table_media.useLayerFields = True
 		popup_info.mediaInfos = [table_media]
-
-		popup_field_descriptions = []
-		for field_name in ordered_popup_fields:
-			popup_field_description = popup_field_description_factory()
-			# Use direct assignment, not setattr() - CIM objects require this to persist values
-			popup_field_description.fieldName = field_name
-			field_alias = ordered_popup_alias_by_name.get(field_name)
-			if isinstance(field_alias, str):
-				popup_field_description.alias = field_alias
-			popup_field_descriptions.append(popup_field_description)
-		popup_info.fieldDescriptions = popup_field_descriptions
-
-		current_popup = getattr(layer_cim, "popupInfo", None)
-		current_media = (
-			getattr(current_popup, "mediaInfos", None)
-			if current_popup is not None
-			else None
-		)
-		current_fields = None
-		if isinstance(current_media, list) and current_media:
-			current_fields = getattr(current_media[0], "fields", None)
-		current_popup_field_descriptions = (
-			getattr(current_popup, "fieldDescriptions", None)
-			if current_popup is not None
-			else None
-		)
-		current_popup_field_snapshot = _popup_field_description_snapshot(current_popup_field_descriptions)
-		current_media_field_snapshot = [str(field) for field in current_fields] if isinstance(current_fields, list) else []
-		target_popup_field_snapshot = _popup_field_description_snapshot(popup_field_descriptions)
-		target_media_field_snapshot = [str(field) for field in ordered_popup_fields]
-
-		if (
-			isinstance(current_fields, list)
-			and current_media_field_snapshot == target_media_field_snapshot
-			and [item.get("fieldName") for item in current_popup_field_snapshot] == ordered_popup_fields
-		):
-			LOGGER.debug(
-				"set_cim_popup_info_fields_by_yml: already correct for '%s' (field_count=%s, media_fields=%s, popup_field_descriptions=%s)",
-				layer_name,
-				len(ordered_popup_fields),
-				current_media_field_snapshot,
-				current_popup_field_snapshot,
-			)
-			return True, False, f"Configured {len(ordered_popup_fields)} popup field(s)"
 
 		layer_cim.popupInfo = popup_info
 		layer.setDefinition(layer_cim)
-		LOGGER.debug(
-			"set_cim_popup_info_fields_by_yml: updated '%s' (field_count=%s, media_fields=%s, popup_field_descriptions=%s)",
-			layer_name,
-			len(ordered_popup_fields),
-			target_media_field_snapshot,
-			target_popup_field_snapshot,
-		)
-		return False, True, f"Configured {len(ordered_popup_fields)} popup field(s)"
+		LOGGER.debug("set_cim_popup_info_fields_by_yml: updated '%s' (useLayerFields=True)", layer_name)
+		return False, True, "Popup set to use layer fields"
 	except Exception as exc:
 		LOGGER.warning("set_cim_popup_info_fields_by_yml: failed for '%s': %s", layer_name, exc)
-		return None, False, f"Could not set popupInfo from cols: {exc}"
+		return None, False, f"Could not set popupInfo: {exc}"
 
 
 
