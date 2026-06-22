@@ -1077,8 +1077,9 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 
 	Rebuilds CIM fieldDescriptions from the datasource when drift is detected
 	(e.g. after ApplySymbologyFromLayer trims the list to LYRX fields only).
-	Only ``fieldName`` and ``visible`` are set — no alias is written, so ArcGIS
-	resolves aliases directly from SDE.
+	Alias values are written to the CIM ``alias`` property so they persist when
+	the layer definition is saved and reopened.
+	https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md
 
 	:param layer: ArcGIS layer object.
 	:return: Tuple ``(made_visible, total_fields)``.
@@ -1120,7 +1121,7 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 	original_description_snapshot = [
 		{
 			"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
-			"fieldAlias": getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None),
+			"fieldAlias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
 		}
 		for fd in current_descriptions
 	]
@@ -1169,7 +1170,7 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 
 			setattr(fd, "fieldName", field_name)
 			if isinstance(field_alias, str) and field_alias.strip():
-				setattr(fd, "fieldAlias", field_alias)
+				setattr(fd, "alias", field_alias)
 			setattr(fd, "visible", True)
 			rebuilt.append(fd)
 
@@ -1180,7 +1181,7 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 		rebuilt_description_snapshot = [
 			{
 				"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
-				"fieldAlias": getattr(fd, "fieldAlias", None) or getattr(fd, "alias", None),
+				"fieldAlias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
 			}
 			for fd in rebuilt
 		]
@@ -1431,13 +1432,12 @@ def check_and_update_definition_query(
 def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
 	"""Apply YAML-configured service id to a layer or standalone table.
 
-	Reads the current service id from the first available CIM attribute and
-	updates only when it differs from ``expected_service_id``.
+	Reads the current service id from canonical CIM attributes and updates only
+	when it differs from ``expected_service_id``.
+	https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md
 
 	Supported CIM attributes (in lookup order):
-	- ``serviceLayerId``
 	- ``serviceLayerID``
-	- ``serviceTableId``
 	- ``serviceTableID``
 
 	:param layer: ArcGIS map item (feature layer or standalone table).
@@ -1461,19 +1461,15 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 
 	try:
 		layer_cim = layer.getDefinition("V3")
-		service_id_attrs = (
-			"serviceLayerId",
-			"serviceLayerID",
-			"serviceTableId",
-			"serviceTableID",
-		)
-		target_attr = next(
-			(attr_name for attr_name in service_id_attrs if hasattr(layer_cim, attr_name)),
-			None,
-		)
-		if target_attr is None:
+
+		if hasattr(layer_cim, "serviceLayerID"):
+			target_attr = "serviceLayerID"
+		elif hasattr(layer_cim, "serviceTableID"):
+			target_attr = "serviceTableID"
+		else:
 			LOGGER.warning(
-				"check_and_update_service_id: failed for '%s': no CIM service id attribute found",
+				"check_and_update_service_id: failed for '%s': missing canonical CIM field "
+				"('serviceLayerID' or 'serviceTableID')",
 				layer_name,
 			)
 			return False, False
@@ -1491,10 +1487,11 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 		setattr(layer_cim, target_attr, expected_id)
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"check_and_update_service_id: updated '%s' (%s -> %s)",
+			"check_and_update_service_id: updated '%s' (%s -> %s) via %s",
 			layer_name,
 			current_id,
 			expected_id,
+			target_attr,
 		)
 		return False, True
 	except Exception as exc:
