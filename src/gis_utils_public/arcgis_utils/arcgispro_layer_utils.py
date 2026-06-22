@@ -12,6 +12,7 @@ Public functions:
 - rebuild_cim_feature_table_field_descriptions: Rebuild CIM featureTable.fieldDescriptions from SDE source.
 - order_cim_field_descriptions_by_yml: Order fields using config-first ordering.
 - set_cim_field_descriptions_visible_by_yml: Set field visibility from configured field list.
+- set_cim_layer_definition_visibility: Set CIM layer/table visibility from config.
 - check_and_update_service_id: Check and update service layer id.
 - configure_display_field: Configure display field from layer config.
 - configure_popup_fields_from_visible: Configure popup fields from visible config.
@@ -1338,61 +1339,43 @@ def set_cim_field_descriptions_visible_by_yml(
 	)
 
 
-def check_and_update_item_visibility(
+def set_cim_layer_definition_visibility(
 	item: Any,
 	expected_visible: Any,
 ) -> tuple[Any, bool, str]:
-	"""Check map item visibility and update when needed.
+	"""Set CIM layer/table visibility from configuration.
 
-	Supports both feature layers and standalone tables. Uses direct ``visible``
-	property when available, then falls back to common CIM visibility attributes.
+	Updates the ``visibility`` attribute in CIMLayerDefinition for layers and
+	CIMStandaloneTable for tables. Applies configuration value and reports
+	whether visibility matches expected state.
 
-	:param item: ArcGIS map item object (layer or table).
-	:param expected_visible: Configured visibility (typically bool).
+	:param item: ArcGIS map layer or table object.
+	:param expected_visible: Expected visibility (typically bool).
 	:return: Tuple ``(is_correct, was_updated, info_message)``.
 	"""
 	item_name = getattr(item, "name", "<unknown>")
 	if expected_visible is None:
-		LOGGER.debug("check_and_update_item_visibility: skip '%s' (no visible configured)", item_name)
+		LOGGER.debug("set_cim_layer_definition_visibility: skip '%s' (no visible configured)", item_name)
 		return None, False, "No visible configured"
 
 	if not isinstance(expected_visible, bool):
-		LOGGER.debug("check_and_update_item_visibility: skip '%s' (invalid visible value)", item_name)
+		LOGGER.debug("set_cim_layer_definition_visibility: skip '%s' (invalid visible value)", item_name)
 		return None, False, "Configured visible must be true/false"
 
-	# Preferred path: direct ArcPy property.
-	if hasattr(item, "visible"):
-		try:
-			current_visible = bool(getattr(item, "visible"))
-			if current_visible == expected_visible:
-				return True, False, f"visible={current_visible}"
-			setattr(item, "visible", expected_visible)
-			return False, True, f"visible={expected_visible}"
-		except Exception as exc:
-			LOGGER.debug(
-				"check_and_update_item_visibility: direct property failed for '%s': %s",
-				item_name,
-				exc,
-			)
-
-	# Fallback: CIM attribute update.
 	try:
+		import arcpy
 		item_cim = item.getDefinition("V3")
-		for attr_name in ("visibility", "visible", "isVisible"):
-			if not hasattr(item_cim, attr_name):
-				continue
+		current_visible = bool(getattr(item_cim, "visibility", False))
+		if current_visible == expected_visible:
+			LOGGER.debug("set_cim_layer_definition_visibility: '%s' visibility=%s (no change needed)", item_name, current_visible)
+			return True, False, f"visibility={current_visible}"
 
-			current_visible = bool(getattr(item_cim, attr_name))
-			if current_visible == expected_visible:
-				return True, False, f"{attr_name}={current_visible}"
-
-			setattr(item_cim, attr_name, expected_visible)
-			item.setDefinition(item_cim)
-			return False, True, f"{attr_name}={expected_visible}"
-
-		return None, False, "Visibility property is not available for this item"
+		setattr(item_cim, "visibility", expected_visible)
+		item.setDefinition(item_cim)
+		LOGGER.debug("set_cim_layer_definition_visibility: '%s' visibility=%s (updated)", item_name, expected_visible)
+		return False, True, f"visibility={expected_visible}"
 	except Exception as exc:
-		LOGGER.warning("check_and_update_item_visibility: failed for '%s': %s", item_name, exc)
+		LOGGER.warning("set_cim_layer_definition_visibility: failed for '%s': %s", item_name, exc)
 		return None, False, f"Could not set visibility: {exc}"
 
 
