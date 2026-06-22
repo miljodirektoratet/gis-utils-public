@@ -1610,12 +1610,12 @@ def set_cim_popup_info_fields_by_yml(
 	popup_title_override: Any = None,
 	popup_description_template: Any = None,
 ) -> tuple[Any, bool, str]:
-	"""Configure popup with layer-name title and display-field description.
+	"""Configure popup fields with optional title and description overrides.
 
 	Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` and populates the
 	``fields`` array with all visible field names from ``featureTable.fieldDescriptions``.
-	The popup title is set to a static layer label/name, while the table caption
-	shows ``<display field alias>: {display_field_name}``.
+	By default, popup title and caption are empty. They are only set when
+	overrides are configured.
 
 	Matches ArcGIS Server REST API expectations for popup configuration.
 	Note that popup field order is only visible in ArcGIS Pro and not reflected when published as Map Server or Feature Server 
@@ -1653,16 +1653,8 @@ def set_cim_popup_info_fields_by_yml(
 			else None
 		)
 
-		# Build static popup title from renderer label (preferred) or layer name.
-		renderer = getattr(layer_cim, "renderer", None)
-		renderer_label = getattr(renderer, "label", None) if renderer is not None else None
-		expected_title = ""
-		if configured_popup_title is not None:
-			expected_title = configured_popup_title
-		elif isinstance(renderer_label, str) and renderer_label.strip():
-			expected_title = renderer_label.strip()
-		elif isinstance(layer_name, str) and layer_name.strip():
-			expected_title = layer_name.strip().replace("_", " ")
+		# Popup title defaults to empty and is only set when configured.
+		expected_title = configured_popup_title or ""
 
 		# Resolve display-field token and label for popup caption.
 		display_field_name = getattr(feature_table, "displayField", None) if feature_table is not None else None
@@ -1670,7 +1662,7 @@ def set_cim_popup_info_fields_by_yml(
 		if isinstance(display_field_name, str) and display_field_name.strip():
 			display_field_token = f"{{{display_field_name}}}"
 
-		display_field_label = "Display field"
+		display_field_label = ""
 
 		# Extract visible field names from featureTable.fieldDescriptions
 		visible_field_names = []
@@ -1701,8 +1693,6 @@ def set_cim_popup_info_fields_by_yml(
 			caption_text = caption_text.replace("{display_field_label}", display_field_label)
 			caption_text = caption_text.replace("{display_field_value}", display_field_token)
 			caption_html = f"<div><p><span>{caption_text}</span></p></div>"
-		elif display_field_token:
-			caption_html = f"<div><p><span>{display_field_label}: {display_field_token}</span></p></div>"
 
 		# Check if already configured correctly
 		current_popup = getattr(layer_cim, "popupInfo", None)
