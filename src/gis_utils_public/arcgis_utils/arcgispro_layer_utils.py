@@ -1683,6 +1683,21 @@ def set_cim_popup_info_fields_by_yml(
 			else None
 		)
 
+		def _popup_field_description_snapshot(field_descriptions: Any) -> list[dict[str, Any]]:
+			"""Return a readable snapshot for popup field descriptions."""
+			snapshot: list[dict[str, Any]] = []
+			if not isinstance(field_descriptions, list):
+				return snapshot
+			for item in field_descriptions:
+				snapshot.append(
+					{
+						"fieldName": getattr(item, "fieldName", None) or getattr(item, "name", None),
+						"alias": getattr(item, "alias", None),
+						"fieldAlias": getattr(item, "fieldAlias", None),
+					}
+				)
+			return snapshot
+
 		# Build popup field sequence from featureTable.fieldDescriptions so popup
 		# name/alias/order mirrors layer field metadata as closely as possible.
 		requested_normalized_set = {
@@ -1779,31 +1794,33 @@ def set_cim_popup_info_fields_by_yml(
 			if current_popup is not None
 			else None
 		)
-		current_popup_field_names = []
-		if isinstance(current_popup_field_descriptions, list):
-			current_popup_field_names = [
-				str(getattr(item, "fieldName", None) or getattr(item, "name", ""))
-				for item in current_popup_field_descriptions
-			]
+		current_popup_field_snapshot = _popup_field_description_snapshot(current_popup_field_descriptions)
+		current_media_field_snapshot = [str(field) for field in current_fields] if isinstance(current_fields, list) else []
+		target_popup_field_snapshot = _popup_field_description_snapshot(popup_field_descriptions)
+		target_media_field_snapshot = [str(field) for field in ordered_popup_fields]
 
 		if (
 			isinstance(current_fields, list)
-			and [str(field) for field in current_fields] == ordered_popup_fields
-			and current_popup_field_names == ordered_popup_fields
+			and current_media_field_snapshot == target_media_field_snapshot
+			and [item.get("fieldName") for item in current_popup_field_snapshot] == ordered_popup_fields
 		):
 			LOGGER.debug(
-				"set_cim_popup_info_fields_by_yml: already correct for '%s' (field_count=%s)",
+				"set_cim_popup_info_fields_by_yml: already correct for '%s' (field_count=%s, media_fields=%s, popup_field_descriptions=%s)",
 				layer_name,
 				len(ordered_popup_fields),
+				current_media_field_snapshot,
+				current_popup_field_snapshot,
 			)
 			return True, False, f"Configured {len(ordered_popup_fields)} popup field(s)"
 
 		layer_cim.popupInfo = popup_info
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"set_cim_popup_info_fields_by_yml: updated '%s' (field_count=%s)",
+			"set_cim_popup_info_fields_by_yml: updated '%s' (field_count=%s, media_fields=%s, popup_field_descriptions=%s)",
 			layer_name,
 			len(ordered_popup_fields),
+			target_media_field_snapshot,
+			target_popup_field_snapshot,
 		)
 		return False, True, f"Configured {len(ordered_popup_fields)} popup field(s)"
 	except Exception as exc:
