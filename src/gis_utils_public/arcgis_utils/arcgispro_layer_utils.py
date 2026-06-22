@@ -9,9 +9,9 @@ Public functions:
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
 - export_map_layers_to_lyrx: Export full layer definitions to LYRX files.
 - export_map_layers_to_lyrx_from_config: Export full layer definitions to LYRX files.
-- set_all_fields_visible: Set all configured layer fields to visible.
-- reorder_layer_fields: Reorder fields using config-first ordering.
-- set_only_fields_visible: Apply visibility from configured field list.
+- rebuild_cim_feature_table_field_descriptions: Rebuild CIM featureTable.fieldDescriptions from SDE source.
+- order_cim_field_descriptions_by_yml: Order fields using config-first ordering.
+- set_cim_field_descriptions_visible_by_yml: Set field visibility from configured field list.
 - check_and_update_service_id: Check and update service layer id.
 - configure_display_field: Configure display field from layer config.
 - configure_popup_fields_from_visible: Configure popup fields from visible config.
@@ -910,13 +910,46 @@ def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
 	if getattr(layer, "isGroupLayer", False) or getattr(layer, "isBasemapLayer", False):
 		return None, None, None
 
+	candidates: list[list[Any]] = []
+
+	# Preferred: datasource path on layer.
 	try:
-		fields = arcpy.ListFields(layer.dataSource)
+		data_source = getattr(layer, "dataSource", None)
+		if isinstance(data_source, str) and data_source.strip():
+			fields_from_datasource = arcpy.ListFields(data_source)
+			if fields_from_datasource:
+				candidates.append(list(fields_from_datasource))
 	except Exception:
-		try:
-			fields = arcpy.ListFields(layer)
-		except Exception:
-			return None, None, None
+		pass
+
+	# Fallback: describe metadata (often exposes full source fields).
+	try:
+		desc = arcpy.Describe(layer)
+		desc_fields = getattr(desc, "fields", None)
+		if desc_fields:
+			candidates.append(list(desc_fields))
+
+		catalog_path = getattr(desc, "catalogPath", None)
+		if isinstance(catalog_path, str) and catalog_path.strip():
+			fields_from_catalog = arcpy.ListFields(catalog_path)
+			if fields_from_catalog:
+				candidates.append(list(fields_from_catalog))
+	except Exception:
+		pass
+
+	# Last resort: layer-scoped fields (can reflect trimmed/view state).
+	try:
+		fields_from_layer = arcpy.ListFields(layer)
+		if fields_from_layer:
+			candidates.append(list(fields_from_layer))
+	except Exception:
+		pass
+
+	if not candidates:
+		return None, None, None
+
+	# Prefer the richest candidate set to avoid propagating trimmed field sets.
+	fields = max(candidates, key=len)
 
 	try:
 		cim = layer.getDefinition("V3")
@@ -940,13 +973,43 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 	"""
 	import arcpy
 
+	candidates: list[list[Any]] = []
+	errors: list[str] = []
+
 	try:
-		fields = arcpy.ListFields(layer.dataSource)
+		data_source = getattr(layer, "dataSource", None)
+		if isinstance(data_source, str) and data_source.strip():
+			fields_from_datasource = arcpy.ListFields(data_source)
+			if fields_from_datasource:
+				candidates.append(list(fields_from_datasource))
 	except Exception as exc:
-		try:
-			fields = arcpy.ListFields(layer)
-		except Exception as exc_source:
-			return {}, f"Could not list fields: {exc}; {exc_source}"
+		errors.append(f"dataSource: {exc}")
+
+	try:
+		desc = arcpy.Describe(layer)
+		desc_fields = getattr(desc, "fields", None)
+		if desc_fields:
+			candidates.append(list(desc_fields))
+
+		catalog_path = getattr(desc, "catalogPath", None)
+		if isinstance(catalog_path, str) and catalog_path.strip():
+			fields_from_catalog = arcpy.ListFields(catalog_path)
+			if fields_from_catalog:
+				candidates.append(list(fields_from_catalog))
+	except Exception as exc:
+		errors.append(f"describe: {exc}")
+
+	try:
+		fields_from_layer = arcpy.ListFields(layer)
+		if fields_from_layer:
+			candidates.append(list(fields_from_layer))
+	except Exception as exc:
+		errors.append(f"layer: {exc}")
+
+	if not candidates:
+		return {}, "Could not list fields: " + "; ".join(errors)
+
+	fields = max(candidates, key=len)
 
 	lookup: dict[str, str] = {}
 	for field in fields:
@@ -960,7 +1023,7 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
 	return lookup, None
 
 
-def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str], str]:
+def get_field_names_from_yml(layer: Any, configured_cols: Any) -> tuple[list[str], str]:
 	"""Resolve configured cols to an explicit field-name list.
 
 	Supports the special keyword ``all`` (or ``*``) to include all source
@@ -982,7 +1045,7 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 			lookup, error_message = _get_layer_field_name_lookup(layer)
 			if error_message:
 				LOGGER.warning(
-					"resolve_configured_cols: could not resolve all fields for '%s': %s",
+					"get_field_names_from_yml: could not resolve all fields for '%s': %s",
 					layer_name,
 					error_message,
 				)
@@ -990,7 +1053,7 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 			return list(lookup.values()), "all"
 
 		LOGGER.warning(
-			"resolve_configured_cols: invalid cols string for '%s': %s",
+			"get_field_names_from_yml: invalid cols string for '%s': %s",
 			layer_name,
 			configured_cols,
 		)
@@ -1000,15 +1063,15 @@ def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str]
 		return [], "none"
 
 	LOGGER.warning(
-		"resolve_configured_cols: invalid cols type for '%s': %s",
+		"get_field_names_from_yml: invalid cols type for '%s': %s",
 		layer_name,
 		type(configured_cols).__name__,
 	)
 	return [], "invalid_type"
 
 
-def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | None:
-	"""Reorder layer fields by config-first then remaining alphabetical.
+def order_cim_field_descriptions_by_yml(layer: Any, desired_field_order: list[str]) -> int | None:
+	"""Reorder CIM field descriptions by config-first then remaining alphabetical.
 
 	:param layer: ArcGIS layer object.
 	:param desired_field_order: Desired field order from config.
@@ -1016,12 +1079,12 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if not desired_field_order:
-		LOGGER.debug("reorder_layer_fields: skip '%s' (no cols configured)", layer_name)
+		LOGGER.debug("order_cim_field_descriptions_by_yml: skip '%s' (no cols configured)", layer_name)
 		return 0
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if not field_descriptions:
-		LOGGER.debug("reorder_layer_fields: skip '%s' (no field descriptions)", layer_name)
+		LOGGER.debug("order_cim_field_descriptions_by_yml: skip '%s' (no field descriptions)", layer_name)
 		return None
 
 	field_by_name: dict[str, Any] = {}
@@ -1059,40 +1122,41 @@ def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | No
 	reordered_descriptions.extend(remaining_descriptions)
 
 	if reordered_descriptions == field_descriptions:
-		LOGGER.debug("reorder_layer_fields: already ordered for '%s'", layer_name)
+		LOGGER.debug("order_cim_field_descriptions_by_yml: already ordered for '%s'", layer_name)
 		return 0
 
 	cim.featureTable.fieldDescriptions = reordered_descriptions
 	layer.setDefinition(cim)
 	LOGGER.debug(
-		"reorder_layer_fields: updated '%s' (field_count=%s)",
+		"order_cim_field_descriptions_by_yml: updated '%s' (field_count=%s)",
 		layer_name,
 		len(reordered_descriptions),
 	)
 	return len(reordered_descriptions)
 
 
-def set_all_fields_visible(layer: Any) -> tuple[int, int]:
-	"""Set all layer fields to visible.
+def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
+	"""Rebuild CIM featureTable fieldDescriptions from SDE datasource.
 
-	Rebuilds CIM fieldDescriptions from the datasource when drift is detected
-	(e.g. after ApplySymbologyFromLayer trims the list to LYRX fields only).
+	Always rebuilds complete CIM fieldDescriptions from the datasource to ensure
+	completeness and consistency. This guarantees all SDE fields are present
+	(e.g. restores fields trimmed by ApplySymbologyFromLayer).
 	Alias values are written to the CIM ``alias`` property so they persist when
 	the layer definition is saved and reopened.
 	https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md
 
 	:param layer: ArcGIS layer object.
-	:return: Tuple ``(made_visible, total_fields)``.
+	:return: Tuple ``(rebuilt_count, total_fields)``.
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	fields, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if fields is None or cim is None:
-		LOGGER.debug("set_all_fields_visible: skip '%s' (no fields available)", layer_name)
+		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (no fields available)", layer_name)
 		return 0, 0
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
-		LOGGER.debug("set_all_fields_visible: skip '%s' (no featureTable on CIM)", layer_name)
+		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (no featureTable on CIM)", layer_name)
 		return 0, 0
 
 	try:
@@ -1103,25 +1167,12 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 	cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
 	builder = getattr(cim, "_arc_object", None)
 
-	source_names = {
-		normalize_field_name(field.get("name") if isinstance(field, dict) else getattr(field, "name", None))
-		for field in fields
-	}
-	source_names.discard(None)
-	source_names.discard("")
-
 	current_descriptions = list(field_descriptions or [])
-	current_names = {
-		normalize_field_name(getattr(fd, "fieldName", None) or getattr(fd, "name", None))
-		for fd in current_descriptions
-	}
-	current_names.discard(None)
-	current_names.discard("")
 
 	original_description_snapshot = [
 		{
 			"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
-			"fieldAlias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
+			"alias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
 		}
 		for fd in current_descriptions
 	]
@@ -1137,95 +1188,74 @@ def set_all_fields_visible(layer: Any) -> tuple[int, int]:
 		if isinstance(default_alias, str) and default_alias.strip():
 			default_alias_by_name[normalized_name] = default_alias
 
-	if not current_descriptions or current_names != source_names:
-		# fieldDescriptions are missing or were trimmed (e.g. by ApplySymbologyFromLayer).
-		# Rebuild from datasource fields. Keep alias only when it exists in
-		# current CIM field descriptions (no fallback values).
-		rebuilt: list[Any] = []
-		for field in fields:
-			field_name = field.get("name") if isinstance(field, dict) else getattr(field, "name", None)
-			if not isinstance(field_name, str) or not field_name:
-				continue
-			field_alias = default_alias_by_name.get(normalize_field_name(field_name) or "")
-			if not isinstance(field_alias, str) or not field_alias.strip():
-				field_alias = (
-					field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
-				)
+	# Always rebuild from datasource to ensure all SDE fields are present.
+	rebuilt: list[Any] = []
+	for field in fields:
+		field_name = field.get("name") if isinstance(field, dict) else getattr(field, "name", None)
+		if not isinstance(field_name, str) or not field_name:
+			continue
+		field_alias = default_alias_by_name.get(normalize_field_name(field_name) or "")
+		if not isinstance(field_alias, str) or not field_alias.strip():
+			field_alias = (
+				field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
+			)
 
-			fd = None
-			if cim_module is not None:
-				create_fn = getattr(cim_module, "CreateCIMObjectFromClassName", None)
-				if callable(create_fn):
-					try:
-						fd = create_fn("CIMFieldDescription", "V3")
-					except Exception:
-						fd = None
-			if fd is None and builder is not None:
+		fd = None
+		if cim_module is not None:
+			create_fn = getattr(cim_module, "CreateCIMObjectFromClassName", None)
+			if callable(create_fn):
 				try:
-					fd = builder.createObject("CIMFieldDescription")
+					fd = create_fn("CIMFieldDescription", "V3")
 				except Exception:
 					fd = None
-			if fd is None:
-				continue
+		if fd is None and builder is not None:
+			try:
+				fd = builder.createObject("CIMFieldDescription")
+			except Exception:
+				fd = None
+		if fd is None:
+			continue
 
-			setattr(fd, "fieldName", field_name)
-			if isinstance(field_alias, str) and field_alias.strip():
-				setattr(fd, "alias", field_alias)
-			setattr(fd, "visible", True)
-			rebuilt.append(fd)
+		setattr(fd, "fieldName", field_name)
+		if isinstance(field_alias, str) and field_alias.strip():
+			setattr(fd, "alias", field_alias)
+		setattr(fd, "visible", True)
+		rebuilt.append(fd)
 
-		if not rebuilt:
-			LOGGER.debug("set_all_fields_visible: skip '%s' (could not build field descriptions)", layer_name)
-			return 0, 0
+	if not rebuilt:
+		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (could not build field descriptions)", layer_name)
+		return 0, 0
 
-		rebuilt_description_snapshot = [
-			{
-				"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
-				"fieldAlias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
-			}
-			for fd in rebuilt
-		]
-		LOGGER.debug(
-			"set_all_fields_visible: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
-			layer_name,
-			original_description_snapshot,
-			rebuilt_description_snapshot,
-		)
-
-		feature_table.fieldDescriptions = rebuilt
-		layer.setDefinition(cim)
-		LOGGER.debug(
-			"set_all_fields_visible: rebuilt '%s' from datasource (count=%s, was=%s)",
-			layer_name,
-			len(rebuilt),
-			len(current_descriptions),
-		)
-		return len(rebuilt), len(rebuilt)
-
-	made_visible = 0
-	for field_description in current_descriptions:
-		current_visible = getattr(field_description, "visible", True)
-		if not current_visible:
-			field_description.visible = True
-			made_visible += 1
-
-	if made_visible > 0:
-		layer.setDefinition(cim)
-
+	rebuilt_description_snapshot = [
+		{
+			"fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
+			"alias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
+		}
+		for fd in rebuilt
+	]
 	LOGGER.debug(
-		"set_all_fields_visible: updated '%s' (made_visible=%s, total=%s)",
+		"rebuild_cim_feature_table_field_descriptions: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
 		layer_name,
-		made_visible,
-		len(field_descriptions),
+		original_description_snapshot,
+		rebuilt_description_snapshot,
 	)
-	return made_visible, len(field_descriptions)
+
+	feature_table.fieldDescriptions = rebuilt
+	layer.setDefinition(cim)
+	LOGGER.debug(
+		"rebuild_cim_feature_table_field_descriptions: rebuilt '%s' from SDE datasource (count=%s, was=%s)",
+		layer_name,
+		len(rebuilt),
+		len(current_descriptions),
+	)
+	return len(rebuilt), len(rebuilt)
 
 
-def set_only_fields_visible(
+def set_cim_field_descriptions_visible_by_yml(
 	layer: Any,
 	visible_field_names: list[str],
 ) -> tuple[int, int, int, int, int, list[str]]:
-	"""Set visibility so only configured fields are visible.
+	"""Set CIM field description visibility from configured field list.
 
 	:param layer: ArcGIS layer object.
 	:param visible_field_names: Configured visible field list.
@@ -1233,12 +1263,12 @@ def set_only_fields_visible(
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if not visible_field_names:
-		LOGGER.debug("set_only_fields_visible: skip '%s' (no cols configured)", layer_name)
+		LOGGER.debug("set_cim_field_descriptions_visible_by_yml: skip '%s' (no cols configured)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if field_descriptions is None:
-		LOGGER.debug("set_only_fields_visible: skip '%s' (no field descriptions)", layer_name)
+		LOGGER.debug("set_cim_field_descriptions_visible_by_yml: skip '%s' (no field descriptions)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	visible_set = {
@@ -1290,7 +1320,7 @@ def set_only_fields_visible(
 		if normalize_field_name(name) not in available_names
 	]
 	LOGGER.debug(
-		"set_only_fields_visible: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
+		"set_cim_field_descriptions_visible_by_yml: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
 		layer_name,
 		made_visible,
 		made_hidden,
