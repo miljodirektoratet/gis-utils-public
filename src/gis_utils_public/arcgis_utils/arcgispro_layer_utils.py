@@ -1607,16 +1607,22 @@ def set_cim_feature_table_display_field(
 
 def set_cim_popup_info_fields_by_yml(
 	layer: Any,
+	popup_title_override: Any = None,
+	popup_description_template: Any = None,
 ) -> tuple[Any, bool, str]:
-	"""Configure popup with visible fields and display field as title.
+	"""Configure popup with layer-name title and display-field description.
 
 	Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` and populates the
 	``fields`` array with all visible field names from ``featureTable.fieldDescriptions``.
-	The popup title is set using field reference syntax ``{displayFieldName}``.
+	The popup title is set to a static layer label/name, while the table caption
+	shows ``<display field alias>: {display_field_name}``.
 
 	Matches ArcGIS Server REST API expectations for popup configuration.
 
 	:param layer: ArcGIS layer object.
+	:param popup_title_override: Optional configured popup title override.
+	:param popup_description_template: Optional popup description template.
+		Supports tokens ``{display_field_label}`` and ``{display_field_value}``.
 	:return: Tuple ``(is_correct, was_updated, info_message)`` where:
 		- ``is_correct`` indicates whether popup was already configured correctly,
 		- ``was_updated`` indicates whether CIM was written,
@@ -1633,21 +1639,67 @@ def set_cim_popup_info_fields_by_yml(
 	try:
 		layer_cim = layer.getDefinition("V3")
 		feature_table = getattr(layer_cim, "featureTable", None)
-		
-		# Get display field name and build title syntax
+		configured_popup_title = (
+			popup_title_override.strip()
+			if isinstance(popup_title_override, str) and popup_title_override.strip()
+			else None
+		)
+		configured_popup_description_template = (
+			popup_description_template.strip()
+			if isinstance(popup_description_template, str) and popup_description_template.strip()
+			else None
+		)
+
+		# Build static popup title from renderer label (preferred) or layer name.
+		renderer = getattr(layer_cim, "renderer", None)
+		renderer_label = getattr(renderer, "label", None) if renderer is not None else None
+		expected_title = ""
+		if configured_popup_title is not None:
+			expected_title = configured_popup_title
+		elif isinstance(renderer_label, str) and renderer_label.strip():
+			expected_title = renderer_label.strip()
+		elif isinstance(layer_name, str) and layer_name.strip():
+			expected_title = layer_name.strip().replace("_", " ")
+
+		# Resolve display-field token and label for popup caption.
 		display_field_name = getattr(feature_table, "displayField", None) if feature_table is not None else None
-		expected_title = f"{{{display_field_name}}}" if isinstance(display_field_name, str) and display_field_name.strip() else ""
-		
+		display_field_token = ""
+		if isinstance(display_field_name, str) and display_field_name.strip():
+			display_field_token = f"{{{display_field_name}}}"
+
+		display_field_label = "Display field"
+
 		# Extract visible field names from featureTable.fieldDescriptions
 		visible_field_names = []
 		if feature_table is not None:
 			field_descs = getattr(feature_table, "fieldDescriptions", None)
 			if isinstance(field_descs, list):
 				for field_desc in field_descs:
-					is_visible = getattr(field_desc, "visible", False)
 					field_name = getattr(field_desc, "fieldName", None)
+					if (
+						isinstance(field_name, str)
+						and isinstance(display_field_name, str)
+						and normalize_field_name(field_name) == normalize_field_name(display_field_name)
+					):
+						alias = getattr(field_desc, "alias", None) or getattr(field_desc, "fieldAlias", None)
+						if isinstance(alias, str) and alias.strip():
+							display_field_label = alias.strip()
+						elif field_name.strip():
+							display_field_label = field_name.strip()
+
+					is_visible = getattr(field_desc, "visible", False)
 					if is_visible and isinstance(field_name, str) and field_name.strip():
 						visible_field_names.append(field_name)
+
+		empty_html = "<div><p><span></span></p></div>"
+		caption_html = empty_html
+		if configured_popup_description_template is not None:
+			caption_text = configured_popup_description_template
+			caption_text = caption_text.replace("{display_field_label}", display_field_label)
+			caption_text = caption_text.replace("{display_field_value}", display_field_token)
+			caption_html = f"<div><p><span>{caption_text}</span></p></div>"
+		elif display_field_token:
+			caption_html = f"<div><p><span>{display_field_label}: {display_field_token}</span></p></div>"
 
 		# Check if already configured correctly
 		current_popup = getattr(layer_cim, "popupInfo", None)
@@ -1657,9 +1709,11 @@ def set_cim_popup_info_fields_by_yml(
 				current_use_layer_fields = getattr(current_media[0], "useLayerFields", None)
 				current_title = getattr(current_popup, "title", None)
 				current_fields = getattr(current_media[0], "fields", None)
+				current_caption = getattr(current_media[0], "caption", None)
 				if (current_use_layer_fields is True and 
 					current_title == expected_title and 
-					current_fields == visible_field_names):
+					current_fields == visible_field_names and
+					current_caption == caption_html):
 					LOGGER.debug(
 						"set_cim_popup_info_fields_by_yml: already correct for '%s' (useLayerFields=True, title=%r, %d fields)",
 						layer_name,
@@ -1677,11 +1731,10 @@ def set_cim_popup_info_fields_by_yml(
 			table_media = cim_module.CreateCIMObjectFromClassName("CIMTableMediaInfo", "V3")
 			popup_info = current_popup or cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
 
-		# Configure popup with visible fields and double-brace title
-		empty_html = "<div><p><span></span></p></div>"
+		# Configure popup with visible fields, static title, and display-field caption.
 		table_media.useLayerFields = True
 		table_media.fields = visible_field_names
-		table_media.caption = empty_html
+		table_media.caption = caption_html
 		table_media.title = empty_html
 		
 		popup_info.mediaInfos = [table_media]
