@@ -1189,7 +1189,14 @@ def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, 
 		field_alias = (
 			field.get("alias") if isinstance(field, dict) else getattr(field, "aliasName", None)
 		)
-		if not isinstance(field_alias, str) or not field_alias.strip():
+		if isinstance(field_alias, str) and field_alias.strip():
+			LOGGER.info(
+				"set_cim_feature_table_field_descriptions_from_sde: read alias from SDE for layer '%s' field '%s': '%s'",
+				layer_name,
+				field_name,
+				field_alias,
+			)
+		else:
 			field_alias = generate_field_alias(field_name)
 			LOGGER.warning(
 				"set_cim_feature_table_field_descriptions_from_sde: missing SDE alias for layer '%s' field '%s'; regenerated alias '%s'",
