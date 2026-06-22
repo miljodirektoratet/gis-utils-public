@@ -175,7 +175,7 @@ def check_arcgispro_project_writable(aprx_path: str) -> bool:
                     return False
                 LOGGER.info("  Invalid response. Enter 'wait' or 'stop'.")
 
-        LOGGER.info("Project is accessible and writable check passed (isReadOnly=False).")
+        LOGGER.debug("Project is accessible and writable check passed (isReadOnly=False).")
         return True
     except Exception as exc:
         LOGGER.error("Error accessing project: %s", exc)

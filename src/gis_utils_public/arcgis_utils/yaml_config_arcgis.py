@@ -86,7 +86,7 @@ def load_map_service_config(
         full YAML dict, ``config_map`` is ``config["map"]`` (or ``{}``), and
         ``config_layers`` is a list of ``(layer_name, layer_cfg)`` tuples.
     """
-    LOGGER.info("Loading map service config YAML: %s", conf_file)
+    LOGGER.debug("Loading map service config YAML: %s", conf_file)
     config = _normalize_config_values(read_yml_config(conf_file))
     config_map = config.get("map", {}) if isinstance(config, dict) else {}
     config_layers = iter_map_service_layer_entries(config)
@@ -114,7 +114,7 @@ def load_map_and_infrastructure_config(
     if isinstance(infrastructure_file, (str, os.PathLike)):
         infra_path = str(infrastructure_file)
         if infra_path.strip():
-            LOGGER.info("Loading infrastructure config YAML: %s", infra_path)
+            LOGGER.debug("Loading infrastructure config YAML: %s", infra_path)
             raw_infra = _normalize_config_values(read_yml_config(infra_path))
             if isinstance(raw_infra, dict):
                 config_infrastructure = raw_infra
@@ -210,7 +210,7 @@ def load_map_infrastructure_and_datamodel_config(
                 f"Datamodel config file does not exist: {datamodel_path}"
             )
 
-        LOGGER.info("Loading datamodel config YAML: %s", datamodel_path)
+        LOGGER.debug("Loading datamodel config YAML: %s", datamodel_path)
         raw_datamodel = _normalize_config_values(read_yml_config(datamodel_path))
         if not isinstance(raw_datamodel, dict):
             raise ValueError("Datamodel config must be a YAML mapping")

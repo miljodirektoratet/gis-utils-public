@@ -223,7 +223,7 @@ def add_sde_layers_and_tables_from_yml_to_map(
 	results: list[dict[str, Any]] = []
 	existing_layer_names = _get_existing_map_layer_names(map_obj)
 
-	LOGGER.info("Add layers/tables from SDE in config order")
+	LOGGER.debug("Add layers/tables from SDE in config order")
 
 	for layer_name, layer_config in layer_entries:
 		normalized_layer_name = layer_name.strip().casefold()
@@ -620,7 +620,7 @@ def apply_lyrx_to_map_layers_from_config(
 	layer_entries = iter_map_service_layer_entries(service_def_config)
 	results: list[dict[str, Any]] = []
 
-	LOGGER.info(
+	LOGGER.debug(
 		"Apply LYRX transfer to map layers (mode=%s, allow_suffix_match=%s, recurse_subfolders=%s)",
 		transfer_mode,
 		allow_suffix_match,
