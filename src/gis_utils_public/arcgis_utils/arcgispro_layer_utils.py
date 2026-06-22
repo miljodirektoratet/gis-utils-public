@@ -9,13 +9,13 @@ Public functions:
 - apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
 - export_map_layers_to_lyrx: Export full layer definitions to LYRX files.
 - export_map_layers_to_lyrx_from_config: Export full layer definitions to LYRX files.
-- rebuild_cim_feature_table_field_descriptions: Rebuild CIM featureTable.fieldDescriptions from SDE source.
-- order_cim_field_descriptions_by_yml: Order fields using config-first ordering.
-- set_cim_field_descriptions_visible_by_yml: Set field visibility from configured field list.
+- set_cim_feature_table_field_descriptions_from_sde: Rebuild CIM featureTable.fieldDescriptions from SDE source.
+- order_cim_feature_table_field_descriptions_by_yml: Order fields using config-first ordering.
+- set_cim_feature_table_field_descriptions_visibility_by_yml: Set field visibility from configured field list.
 - set_cim_layer_definition_visibility: Set CIM layer/table visibility from config.
-- check_and_update_service_id: Check and update service layer id.
-- configure_display_field: Configure display field from layer config.
-- configure_popup_fields_from_visible: Configure popup fields from visible config.
+- set_cim_layer_definition_service_id: Check and update service layer id.
+- set_cim_feature_table_display_field: Configure display field from layer config.
+- set_cim_popup_info_fields_by_yml: Configure popup fields from visible config.
 """
 
 import logging
@@ -1071,8 +1071,11 @@ def get_field_names_from_yml(layer: Any, configured_cols: Any) -> tuple[list[str
 	return [], "invalid_type"
 
 
-def order_cim_field_descriptions_by_yml(layer: Any, desired_field_order: list[str]) -> int | None:
-	"""Reorder CIM field descriptions by config-first then remaining alphabetical.
+def order_cim_feature_table_field_descriptions_by_yml(layer: Any, desired_field_order: list[str]) -> int | None:
+	"""Reorder CIM feature-table field descriptions by YAML order.
+
+	Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions``.
+	Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
 	:param layer: ArcGIS layer object.
 	:param desired_field_order: Desired field order from config.
@@ -1080,12 +1083,12 @@ def order_cim_field_descriptions_by_yml(layer: Any, desired_field_order: list[st
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if not desired_field_order:
-		LOGGER.debug("order_cim_field_descriptions_by_yml: skip '%s' (no cols configured)", layer_name)
+		LOGGER.debug("order_cim_feature_table_field_descriptions_by_yml: skip '%s' (no cols configured)", layer_name)
 		return 0
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if not field_descriptions:
-		LOGGER.debug("order_cim_field_descriptions_by_yml: skip '%s' (no field descriptions)", layer_name)
+		LOGGER.debug("order_cim_feature_table_field_descriptions_by_yml: skip '%s' (no field descriptions)", layer_name)
 		return None
 
 	field_by_name: dict[str, Any] = {}
@@ -1123,28 +1126,25 @@ def order_cim_field_descriptions_by_yml(layer: Any, desired_field_order: list[st
 	reordered_descriptions.extend(remaining_descriptions)
 
 	if reordered_descriptions == field_descriptions:
-		LOGGER.debug("order_cim_field_descriptions_by_yml: already ordered for '%s'", layer_name)
+		LOGGER.debug("order_cim_feature_table_field_descriptions_by_yml: already ordered for '%s'", layer_name)
 		return 0
 
 	cim.featureTable.fieldDescriptions = reordered_descriptions
 	layer.setDefinition(cim)
 	LOGGER.debug(
-		"order_cim_field_descriptions_by_yml: updated '%s' (field_count=%s)",
+		"order_cim_feature_table_field_descriptions_by_yml: updated '%s' (field_count=%s)",
 		layer_name,
 		len(reordered_descriptions),
 	)
 	return len(reordered_descriptions)
 
 
-def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
-	"""Rebuild CIM featureTable fieldDescriptions from SDE datasource.
+def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, int]:
+	"""Set CIM feature-table field descriptions from SDE datasource.
 
-	Always rebuilds complete CIM fieldDescriptions from the datasource to ensure
-	completeness and consistency. This guarantees all SDE fields are present
-	(e.g. restores fields trimmed by ApplySymbologyFromLayer).
-	Alias values are written to the CIM ``alias`` property so they persist when
-	the layer definition is saved and reopened.
-	https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md
+	Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions`` and
+	its ``fieldDescriptions[].alias`` and ``fieldDescriptions[].visible`` values.
+	Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
 	:param layer: ArcGIS layer object.
 	:return: Tuple ``(rebuilt_count, total_fields)``.
@@ -1152,12 +1152,12 @@ def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
 	layer_name = getattr(layer, "name", "<unknown>")
 	fields, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if fields is None or cim is None:
-		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (no fields available)", layer_name)
+		LOGGER.debug("set_cim_feature_table_field_descriptions_from_sde: skip '%s' (no fields available)", layer_name)
 		return 0, 0
 
 	feature_table = getattr(cim, "featureTable", None)
 	if feature_table is None:
-		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (no featureTable on CIM)", layer_name)
+		LOGGER.debug("set_cim_feature_table_field_descriptions_from_sde: skip '%s' (no featureTable on CIM)", layer_name)
 		return 0, 0
 
 	try:
@@ -1224,7 +1224,7 @@ def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
 		rebuilt.append(fd)
 
 	if not rebuilt:
-		LOGGER.debug("rebuild_cim_feature_table_field_descriptions: skip '%s' (could not build field descriptions)", layer_name)
+		LOGGER.debug("set_cim_feature_table_field_descriptions_from_sde: skip '%s' (could not build field descriptions)", layer_name)
 		return 0, 0
 
 	rebuilt_description_snapshot = [
@@ -1235,7 +1235,7 @@ def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
 		for fd in rebuilt
 	]
 	LOGGER.debug(
-		"rebuild_cim_feature_table_field_descriptions: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
+		"set_cim_feature_table_field_descriptions_from_sde: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
 		layer_name,
 		original_description_snapshot,
 		rebuilt_description_snapshot,
@@ -1244,7 +1244,7 @@ def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
 	feature_table.fieldDescriptions = rebuilt
 	layer.setDefinition(cim)
 	LOGGER.debug(
-		"rebuild_cim_feature_table_field_descriptions: rebuilt '%s' from SDE datasource (count=%s, was=%s)",
+		"set_cim_feature_table_field_descriptions_from_sde: rebuilt '%s' from SDE datasource (count=%s, was=%s)",
 		layer_name,
 		len(rebuilt),
 		len(current_descriptions),
@@ -1252,11 +1252,14 @@ def rebuild_cim_feature_table_field_descriptions(layer: Any) -> tuple[int, int]:
 	return len(rebuilt), len(rebuilt)
 
 
-def set_cim_field_descriptions_visible_by_yml(
+def set_cim_feature_table_field_descriptions_visibility_by_yml(
 	layer: Any,
 	visible_field_names: list[str],
 ) -> tuple[int, int, int, int, int, list[str]]:
-	"""Set CIM field description visibility from configured field list.
+	"""Set CIM field-description visibility from YAML field list.
+
+	Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions[].visible``.
+	Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
 	:param layer: ArcGIS layer object.
 	:param visible_field_names: Configured visible field list.
@@ -1264,12 +1267,12 @@ def set_cim_field_descriptions_visible_by_yml(
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if not visible_field_names:
-		LOGGER.debug("set_cim_field_descriptions_visible_by_yml: skip '%s' (no cols configured)", layer_name)
+		LOGGER.debug("set_cim_feature_table_field_descriptions_visibility_by_yml: skip '%s' (no cols configured)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
 	if field_descriptions is None:
-		LOGGER.debug("set_cim_field_descriptions_visible_by_yml: skip '%s' (no field descriptions)", layer_name)
+		LOGGER.debug("set_cim_feature_table_field_descriptions_visibility_by_yml: skip '%s' (no field descriptions)", layer_name)
 		return 0, 0, 0, 0, 0, []
 
 	visible_set = {
@@ -1321,7 +1324,7 @@ def set_cim_field_descriptions_visible_by_yml(
 		if normalize_field_name(name) not in available_names
 	]
 	LOGGER.debug(
-		"set_cim_field_descriptions_visible_by_yml: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
+		"set_cim_feature_table_field_descriptions_visibility_by_yml: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
 		layer_name,
 		made_visible,
 		made_hidden,
@@ -1442,12 +1445,14 @@ def check_and_update_definition_query(
 		return None, False, f"Could not set definition query: {exc}"
 
 
-def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
-	"""Apply YAML-configured service id to a layer or standalone table.
+def set_cim_layer_definition_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
+	"""Set CIM service id for a layer or standalone table.
 
-	Reads the current service id from canonical CIM attributes and updates only
-	when it differs from ``expected_service_id``.
-	https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md
+	Updates CIM object ``CIMLayerDefinition.serviceLayerID`` for layers and
+	``CIMStandaloneTable.serviceTableID`` for standalone tables.
+	Specs:
+	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimlayerdefinition-8
+	- https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMStandaloneTable.md
 
 	Supported CIM attributes (in lookup order):
 	- ``serviceLayerID``
@@ -1459,14 +1464,14 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if expected_service_id is None:
-		LOGGER.debug("check_and_update_service_id: skip '%s' (no service_id configured)", layer_name)
+		LOGGER.debug("set_cim_layer_definition_service_id: skip '%s' (no service_id configured)", layer_name)
 		return True, False
 
 	try:
 		expected_id = int(expected_service_id)
 	except Exception:
 		LOGGER.warning(
-			"check_and_update_service_id: skip '%s' (invalid configured service_id: %r)",
+			"set_cim_layer_definition_service_id: skip '%s' (invalid configured service_id: %r)",
 			layer_name,
 			expected_service_id,
 		)
@@ -1481,7 +1486,7 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 			target_attr = "serviceTableID"
 		else:
 			LOGGER.warning(
-				"check_and_update_service_id: failed for '%s': missing canonical CIM field "
+				"set_cim_layer_definition_service_id: failed for '%s': missing canonical CIM field "
 				"('serviceLayerID' or 'serviceTableID')",
 				layer_name,
 			)
@@ -1494,13 +1499,13 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 			current_id = None
 
 		if current_id == expected_id:
-			LOGGER.debug("check_and_update_service_id: already correct for '%s' (%s)", layer_name, current_id)
+			LOGGER.debug("set_cim_layer_definition_service_id: already correct for '%s' (%s)", layer_name, current_id)
 			return True, False
 
 		setattr(layer_cim, target_attr, expected_id)
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"check_and_update_service_id: updated '%s' (%s -> %s) via %s",
+			"set_cim_layer_definition_service_id: updated '%s' (%s -> %s) via %s",
 			layer_name,
 			current_id,
 			expected_id,
@@ -1508,15 +1513,18 @@ def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[b
 		)
 		return False, True
 	except Exception as exc:
-		LOGGER.warning("check_and_update_service_id: failed for '%s': %s", layer_name, exc)
+		LOGGER.warning("set_cim_layer_definition_service_id: failed for '%s': %s", layer_name, exc)
 		return False, False
 
 
-def configure_display_field(
+def set_cim_feature_table_display_field(
 	layer: Any,
 	display_field_name: Any,
 ) -> tuple[Any, bool, str]:
-	"""Set display field when configured field exists on layer.
+	"""Set CIM display field when configured field exists on layer.
+
+	Updates CIM object ``CIMVectorLayer.featureTable.displayField``.
+	Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
 	:param layer: ArcGIS layer object.
 	:param display_field_name: Configured display field.
@@ -1524,23 +1532,23 @@ def configure_display_field(
 	"""
 	layer_name = getattr(layer, "name", "<unknown>")
 	if not isinstance(display_field_name, str) or not display_field_name.strip():
-		LOGGER.debug("configure_display_field: skip '%s' (no display_field configured)", layer_name)
+		LOGGER.debug("set_cim_feature_table_display_field: skip '%s' (no display_field configured)", layer_name)
 		return None, False, "No display_field configured"
 
 	requested = display_field_name.strip()
 	requested_normalized = normalize_field_name(requested)
 	if requested_normalized is None:
-		LOGGER.debug("configure_display_field: skip '%s' (empty display_field)", layer_name)
+		LOGGER.debug("set_cim_feature_table_display_field: skip '%s' (empty display_field)", layer_name)
 		return None, False, "Configured display_field is empty after normalization"
 
 	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
 	if error_message:
-		LOGGER.warning("configure_display_field: field lookup failed for '%s': %s", layer_name, error_message)
+		LOGGER.warning("set_cim_feature_table_display_field: field lookup failed for '%s': %s", layer_name, error_message)
 		return None, False, error_message
 
 	if requested_normalized not in available_by_normalized:
 		LOGGER.debug(
-			"configure_display_field: requested field not found for '%s' (requested=%s)",
+			"set_cim_feature_table_display_field: requested field not found for '%s' (requested=%s)",
 			layer_name,
 			requested,
 		)
@@ -1557,7 +1565,7 @@ def configure_display_field(
 		current_display = getattr(feature_table, "displayField", None)
 		if normalize_field_name(current_display) == requested_normalized:
 			LOGGER.debug(
-				"configure_display_field: already correct for '%s' (%s)",
+				"set_cim_feature_table_display_field: already correct for '%s' (%s)",
 				layer_name,
 				resolved_field_name,
 			)
@@ -1566,21 +1574,25 @@ def configure_display_field(
 		setattr(feature_table, "displayField", resolved_field_name)
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"configure_display_field: updated '%s' (%s)",
+			"set_cim_feature_table_display_field: updated '%s' (%s)",
 			layer_name,
 			resolved_field_name,
 		)
 		return False, True, resolved_field_name
 	except Exception as exc:
-		LOGGER.warning("configure_display_field: failed for '%s': %s", layer_name, exc)
+		LOGGER.warning("set_cim_feature_table_display_field: failed for '%s': %s", layer_name, exc)
 		return None, False, f"Could not set display field: {exc}"
 
 
-def configure_popup_fields_from_visible(
+def set_cim_popup_info_fields_by_yml(
 	layer: Any,
 	visible_field_names: list[str],
 ) -> tuple[Any, bool, str]:
-	"""Configure popup fields from configured visible field order.
+	"""Set popup fields from configured visible YAML field order.
+
+	Updates CIM object ``CIMPopupInfo.mediaInfos[].fields`` via
+	``CIMVectorLayer.popupInfo``.
+	Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMPopup.md#cimpopupinfo
 
 	:param layer: ArcGIS layer object.
 	:param visible_field_names: Configured visible field list.
@@ -1590,7 +1602,7 @@ def configure_popup_fields_from_visible(
 	layer_name = getattr(layer, "name", "<unknown>")
 
 	if not isinstance(visible_field_names, list) or not visible_field_names:
-		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no cols configured)", layer_name)
+		LOGGER.debug("set_cim_popup_info_fields_by_yml: skip '%s' (no cols configured)", layer_name)
 		return None, False, "No cols configured"
 
 	normalized_requested: list[str] = []
@@ -1602,12 +1614,12 @@ def configure_popup_fields_from_visible(
 			normalized_requested.append(normalized)
 
 	if not normalized_requested:
-		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no valid cols)", layer_name)
+		LOGGER.debug("set_cim_popup_info_fields_by_yml: skip '%s' (no valid cols)", layer_name)
 		return None, False, "No valid field names in cols"
 
 	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
 	if error_message:
-		LOGGER.warning("configure_popup_fields_from_visible: field lookup failed for '%s': %s", layer_name, error_message)
+		LOGGER.warning("set_cim_popup_info_fields_by_yml: field lookup failed for '%s': %s", layer_name, error_message)
 		return None, False, error_message
 
 	popup_fields = [
@@ -1616,12 +1628,12 @@ def configure_popup_fields_from_visible(
 		if name in available_by_normalized
 	]
 	if not popup_fields:
-		LOGGER.debug("configure_popup_fields_from_visible: no fields found for '%s' from configured cols", layer_name)
+		LOGGER.debug("set_cim_popup_info_fields_by_yml: no fields found for '%s' from configured cols", layer_name)
 		return None, False, "No configured cols fields were found in layer"
 
 	cim_module = getattr(arcpy, "cim", None)
 	if cim_module is None:
-		LOGGER.warning("configure_popup_fields_from_visible: arcpy.cim missing for '%s'", layer_name)
+		LOGGER.warning("set_cim_popup_info_fields_by_yml: arcpy.cim missing for '%s'", layer_name)
 		return None, False, "arcpy.cim is not available in this ArcGIS Pro environment"
 
 	try:
@@ -1654,7 +1666,7 @@ def configure_popup_fields_from_visible(
 
 		if isinstance(current_fields, list) and [str(field) for field in current_fields] == popup_fields:
 			LOGGER.debug(
-				"configure_popup_fields_from_visible: already correct for '%s' (field_count=%s)",
+				"set_cim_popup_info_fields_by_yml: already correct for '%s' (field_count=%s)",
 				layer_name,
 				len(popup_fields),
 			)
@@ -1663,13 +1675,13 @@ def configure_popup_fields_from_visible(
 		layer_cim.popupInfo = popup_info
 		layer.setDefinition(layer_cim)
 		LOGGER.debug(
-			"configure_popup_fields_from_visible: updated '%s' (field_count=%s)",
+			"set_cim_popup_info_fields_by_yml: updated '%s' (field_count=%s)",
 			layer_name,
 			len(popup_fields),
 		)
 		return False, True, f"Configured {len(popup_fields)} popup field(s)"
 	except Exception as exc:
-		LOGGER.warning("configure_popup_fields_from_visible: failed for '%s': %s", layer_name, exc)
+		LOGGER.warning("set_cim_popup_info_fields_by_yml: failed for '%s': %s", layer_name, exc)
 		return None, False, f"Could not set popupInfo from cols: {exc}"
 
 
