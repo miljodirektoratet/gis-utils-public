@@ -4,12 +4,11 @@ Provides ArcGIS-related helper modules that are imported on demand.
 
 Usage requirements:
 - Run from an ArcGIS Pro conda environment.
-- Install this sub-package without dependencies. 
+- Install this sub-package without dependencies.
 - pip install --no-deps "git+https://github.com/miljodirektoratet/gis-utils-public.git@main"
 
 Available modules:
 - agol_user_admin
-- yaml_config_arcgis
 - arcgispro_project_utils
 - arcgispro_map_utils
 - arcgispro_layer_utils
@@ -43,14 +42,12 @@ if TYPE_CHECKING:
         arcgispro_layer_utils,
         arcgispro_map_utils,
         field_utils,
-        yaml_config_arcgis,
         sde_utils,
         # module_1,  # Example for adding a new module
     )
 
 __all__ = [
     "agol_user_admin",
-    "yaml_config_arcgis",
     "arcgispro_project_utils",
     "arcgispro_map_utils",
     "arcgispro_layer_utils",
