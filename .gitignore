@@ -1,5 +1,10 @@
-# Python
+# Basic Python .gitignore
+# Tip: for a more comprehensive .gitignore see GitHubs Python.gitignore
+# > https://github.com/github/gitignore/blob/main/Python.gitignore
+
+# Python-generated files
 __pycache__/
+*.py[oc]
 *.py[cod]
 *.pyo
 *.pyd
@@ -7,17 +12,34 @@ __pycache__/
 # Packaging
 build/
 dist/
-*.egg-info/
+wheels/
+*.egg-info
+_version.py
 
 # Virtual environments
-.venv/
+.venv
 venv/
 .pixi/
 env/
 
-# Tool caches
+# Ruff stuff:
 .ruff_cache/
+
+# mypy
 .mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pytest: unit test / coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
 
 # Notebooks
 .ipynb_checkpoints/
@@ -28,4 +50,5 @@ env/
 notebooks/.env
 
 # Folders
+braindump/
 tmp/

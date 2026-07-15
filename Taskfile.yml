@@ -1,0 +1,135 @@
+version: "3"
+
+vars:
+  PROJECT_NAME: ml_ajourhold
+  PYTHON_VERSION: ">=3.12"
+
+tasks:
+  # Setup and Installation
+  install:
+    desc: Install dependencies and setup development environment
+    cmds:
+      - uv sync --group dev
+
+  pre-commit-install:
+    desc: Install pre-commit hooks
+    cmds:
+      - uv run pre-commit install
+    status:
+      - test -f .git/hooks/pre-commit
+
+  # Code Quality
+  pre-commit:
+    desc: Run pre-commit hooks on all files
+    cmds:
+      - uv run pre-commit run --all-files
+
+  pre-commit-uninstall:
+    desc: Uninstall pre-commit hooks
+    cmds:
+      - uv run pre-commit uninstall
+
+  check:
+    desc: Run all code quality checks
+    deps: [lint, typecheck, test-cov, deps-check]
+
+  format:
+    desc: Format code with Ruff
+    cmds:
+      - uv run ruff format
+
+  lint:
+    desc: Run linting checks
+    cmds:
+      - uv run ruff check
+
+  lint-fix:
+    desc: Run linting checks and auto-fix issues
+    cmds:
+      - uv run ruff check --fix
+
+  typecheck:
+    desc: Run type checking with mypy
+    cmds:
+      - uv run mypy src/
+
+  deps-check:
+    desc: Check for dependency issues
+    cmds:
+      - uv run deptry .
+
+  # Testing
+  test:
+    desc: Run tests
+    cmds:
+      - uv run pytest
+
+  test-cov:
+    desc: Run tests with coverage
+    cmds:
+      - uv run pytest --cov
+
+  # Build and Release
+  build:
+    desc: Build the package
+    cmds:
+      - uv build
+      - echo "Package built in dist/"
+
+  clean:
+    desc: Clean build artifacts and caches with python for platform independence
+    cmds:
+      - python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['.pytest_cache','.mypy_cache','.ruff_cache','htmlcov']]"
+      - python -c "import pathlib; [p.unlink() for p in pathlib.Path('.').glob('.coverage*') if p.is_file()]"
+      - python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]"
+
+  # Development
+  run:
+    desc: Run the CLI application
+    cmds:
+      - uv run --no-sync ml-ajourhold
+
+  run-docker:
+    desc: Build and run Docker container (development mode with volume mounts)
+    cmds:
+      - |
+        echo "Building Docker image..."
+        IMAGE_ID=$(docker build -q .)
+        echo "Running application in container..."
+        docker run --rm --volume .:/app --volume /app/.venv $IMAGE_ID
+
+  run-docker-prod:
+    desc: Run production container from GitHub Container Registry
+    cmds:
+      - docker run --rm ghcr.io/miljodirektoratet/ml-ajourhold:latest
+
+  dev-setup:
+    desc: Complete development environment setup (without pre-commit installation)
+    deps: [install, check]
+    cmds:
+      - echo "Development environment ready!"
+      - echo "Try - task run"
+
+  # Version Management
+  release:
+    desc: "Tag and deploy release from main (usage: task release VERSION=v1.0.0)"
+    cmds:
+      - git tag {{.VERSION}}
+      - git push origin {{.VERSION}}
+      - echo "Tagged and pushed {{.VERSION}}"
+      - echo "CD workflows triggered. Monitor at https://github.com/miljodirektoratet/ml-ajourhold/actions"
+    requires:
+      vars: [VERSION]
+
+  # CI/CD Simulation
+  ci-local:
+    desc: Simulate CI pipeline locally
+    deps: [pre-commit-install, pre-commit, pre-commit-uninstall, test-cov]
+    cmds:
+      - echo "Local CI simulation complete!"
+
+  # Help
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list-all

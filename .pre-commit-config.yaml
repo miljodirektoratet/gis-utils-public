@@ -1,0 +1,66 @@
+# useful commands:
+# pre-commit install
+# pre-commit run --files <file1> <file2>
+# pre-commit run --files R/*
+# pre-commit run --all-files
+# pre-commit uninstall
+# exclude: '^(notebooks|scripts)/.*'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+        exclude: \.vscode/.*|\.devcontainer/.*
+      - id: check-toml
+      - id: check-yaml
+      - id: check-xml
+      - id: end-of-file-fixer
+        exclude: ^\.safety-project\.ini$
+      - id: trailing-whitespace
+      - id: check-case-conflict
+      - id: check-builtin-literals
+      - id: check-docstring-first
+      - id: detect-private-key
+
+  # Code Quality
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.10.2
+    hooks:
+      - id: uv-lock
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --show-fixes]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+
+  # Notebook Quality
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.9.1
+    hooks:
+      - id: nbqa-ruff
+        args: [--fix, --exit-non-zero-on-fix, --extend-ignore=D]
+        additional_dependencies: [ruff==0.15.20]
+      - id: nbqa-ruff-format
+        additional_dependencies: [ruff==0.15.20]
+      - id: nbqa-mypy
+        args: [--ignore-missing-imports]
+        additional_dependencies: [mypy==2.1.0]
+
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.0
+    hooks:
+      - id: nbstripout

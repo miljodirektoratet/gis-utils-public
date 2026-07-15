@@ -96,9 +96,55 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+# Mypy config
+[tool.mypy]
+python_version = "3.12"
+
+[[tool.mypy.overrides]]
+module = [
+    "arcpy",
+    "arcpy.*",
+    "gis_utils_public",
+    "gis_utils_public.*",
+    "arcgis",
+    "arcgis.*"
+    ]
+ignore_missing_imports = true
+
+# DEPTRY config
+[tool.deptry]
+known_first_party = [
+    "src",
+    "gis_utils_public"
+]
+
+[tool.deptry.per_rule_ignores]
+DEP001 = [
+    "arcpy",
+]
+# PYTEST config
+[tool.pytest]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "ci_exclude: Tests excluded from CI/CD pipeline"
+]
+addopts = [
+  "--cov=src",
+  "--cov-report=term",
+  "--cov-report=xml:coverage.xml"
+]
+norecursedirs = [
+    "braindump",
+    "tmp"
+]
+
 # RUFF Rules
 [tool.ruff]
 exclude = [
+    "braindump",
     "tmp",
 ]
 
@@ -118,11 +164,21 @@ select = [
 ]
 
 ignore = [
+    # Docstrings
+    "D100",   # pydocstyle: Missing docstring in public module
+    #"D103",   # pydocstyle: Missing docstring in public function
     "D107",   # pydocstyle: Missing docstring in __init__
+    "D202",   # pydocstyle: No blank lines allowed after function docstring
+    "D205",   # pydocstyle: 1 blank line required between summary line and description
     "D213",   # pydocstyle: Multi-line summary should start at the second line
+    "D301",   # pydocstyle: Raw strings are not allowed in docstrings
+    "D400",   # pydocstyle: First line should end with a period
+    "D401",   # pydocstyle: First line should be in imperative mood
     "E501",   # pycodestyle: Line too long
     "F401",   # pyflakes: Module imported but unused
     "D417",   # pydocstyle: Missing argument descriptions in docstrings
+
+    # Other
     "ERA001"  # eradicate: Commented out code
 ]
 
@@ -133,7 +189,7 @@ unfixable = [
 [tool.ruff.lint.extend-per-file-ignores]
 "__init__.py" = ["E", "D"]
 "tests/*.py" = ["D"]
-"**/*.ipynb" = ["D"]
+"**/*.ipynb" = ["D", "E402"]
 "scripts/*.py" = ["D"]
 
 [tool.ruff.format]
