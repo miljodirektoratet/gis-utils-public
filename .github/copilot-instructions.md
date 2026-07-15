@@ -8,7 +8,7 @@ File location: `.github/copilot-instructions.md`
 
 Important folders:
 
-- 
+-
 
 Tech stack: ArcGIS Pro, AGOL, Python (conda-based)
 

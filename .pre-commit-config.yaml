@@ -5,6 +5,7 @@
 # pre-commit run --all-files
 # pre-commit uninstall
 # exclude: '^(notebooks|scripts)/.*'
+exclude: ^notebooks/setup_geospatial_gpu_uv\.ipynb$
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -53,11 +54,14 @@ repos:
     hooks:
       - id: nbqa-ruff
         args: [--fix, --exit-non-zero-on-fix, --extend-ignore=D]
+        exclude: ^notebooks/setup_geospatial_gpu_uv\.ipynb$
         additional_dependencies: [ruff==0.15.20]
       - id: nbqa-ruff-format
+        exclude: ^notebooks/setup_geospatial_gpu_uv\.ipynb$
         additional_dependencies: [ruff==0.15.20]
       - id: nbqa-mypy
         args: [--ignore-missing-imports]
+        exclude: ^notebooks/setup_geospatial_gpu_uv\.ipynb$
         additional_dependencies: [mypy==2.1.0]
 
   - repo: https://github.com/kynan/nbstripout

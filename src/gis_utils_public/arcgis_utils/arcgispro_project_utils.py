@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
-import arcpy
+import arcpy  # type: ignore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -165,7 +165,9 @@ def check_arcgispro_project_writable(aprx_path: str) -> bool:
         if is_locked:
             LOGGER.error("Project is locked or read-only.")
             while True:
-                response = input("  wait and retry / stop? [wait/stop]: ").lower().strip()
+                response = (
+                    input("  wait and retry / stop? [wait/stop]: ").lower().strip()
+                )
                 if response == "wait":
                     LOGGER.info("  Waiting 30 seconds...")
                     time.sleep(30)
@@ -175,7 +177,9 @@ def check_arcgispro_project_writable(aprx_path: str) -> bool:
                     return False
                 LOGGER.info("  Invalid response. Enter 'wait' or 'stop'.")
 
-        LOGGER.debug("Project is accessible and writable check passed (isReadOnly=False).")
+        LOGGER.debug(
+            "Project is accessible and writable check passed (isReadOnly=False)."
+        )
         return True
     except Exception as exc:
         LOGGER.error("Error accessing project: %s", exc)
@@ -237,10 +241,14 @@ def save_and_close_arcgispro_project(
                     raise ValueError("aprx_dir is required when save_mode='copy'")
                 if not isinstance(data_product, str) or not data_product.strip():
                     raise ValueError("data_product is required when save_mode='copy'")
-                result["COPY_PATH"] = os.path.join(aprx_dir, f"{data_product}_copy.aprx")
+                result["COPY_PATH"] = os.path.join(
+                    aprx_dir, f"{data_product}_copy.aprx"
+                )
             aprx.saveACopy(result["COPY_PATH"])
             result["SAVED"] = True
-            saved_path = result["COPY_PATH"]
+            saved_path = (
+                result["COPY_PATH"] if isinstance(result["COPY_PATH"], str) else None
+            )
         else:
             raise ValueError("save_mode must be one of: overwrite, copy, none")
 

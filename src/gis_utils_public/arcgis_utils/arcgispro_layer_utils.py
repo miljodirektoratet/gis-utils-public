@@ -129,7 +129,7 @@ def construct_sde_dataset_path(
     :return: Tuple of resolved dataset path candidate and all tried paths.
     :raises ValueError: If required dataset config is missing.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     source_cfg = (layer_config or {}).get("source", {})
     feature_dataset = source_cfg.get("feature_dataset")
@@ -167,7 +167,7 @@ def add_layer_from_sde(
     :param layer_config: Per-layer config dictionary.
     :return: Result dictionary for logging/reporting.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     result = _create_add_layer_from_sde_result(
         layer_name=layer_name,
@@ -505,7 +505,7 @@ def apply_lyrx_to_layer(
     :param lyrx_lookup_index: Optional prebuilt LYRX lookup index for batch runs.
     :return: Result dictionary for logging/reporting.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     mode = str(transfer_mode or "").strip().lower()
     if mode not in {"symbology", "all"}:
@@ -580,11 +580,11 @@ def apply_lyrx_to_layer(
             if hasattr(source_cim, "labelClasses") and hasattr(
                 target_cim, "labelClasses"
             ):
-                target_cim.labelClasses = getattr(source_cim, "labelClasses")
+                target_cim.labelClasses = source_cim.labelClasses
                 changed_cim = True
 
             if hasattr(source_cim, "popupInfo") and hasattr(target_cim, "popupInfo"):
-                target_cim.popupInfo = getattr(source_cim, "popupInfo")
+                target_cim.popupInfo = source_cim.popupInfo
                 changed_cim = True
 
             source_ft = getattr(source_cim, "featureTable", None)
@@ -593,7 +593,7 @@ def apply_lyrx_to_layer(
                 if hasattr(source_ft, "htmlPopupInfo") and hasattr(
                     target_ft, "htmlPopupInfo"
                 ):
-                    target_ft.htmlPopupInfo = getattr(source_ft, "htmlPopupInfo")
+                    target_ft.htmlPopupInfo = source_ft.htmlPopupInfo
                     changed_cim = True
 
             if changed_cim:
@@ -879,7 +879,7 @@ def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
     :return: Tuple ``(fields, cim, field_descriptions)`` or ``(None, None, None)``
             when fields/CIM cannot be resolved.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     if getattr(layer, "isGroupLayer", False) or getattr(layer, "isBasemapLayer", False):
         return None, None, None
@@ -945,7 +945,7 @@ def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None
     :param layer: ArcGIS layer object.
     :return: Tuple ``(lookup, error_message)``.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     candidates: list[list[Any]] = []
     errors: list[str] = []
@@ -1103,12 +1103,18 @@ def order_cim_feature_table_field_descriptions_by_yml(
         if normalized not in seen_fields:
             remaining_descriptions.append(field_description)
 
-    remaining_descriptions.sort(
-        key=lambda field_description: (
-            getattr(field_description, "fieldName", None)
-            or getattr(field_description, "name", "")
-        ).lower()
-    )
+    def _field_description_sort_key(field_description: Any) -> str:
+        field_name = getattr(field_description, "fieldName", None)
+        if isinstance(field_name, str):
+            return field_name.lower()
+
+        fallback_name = getattr(field_description, "name", None)
+        if isinstance(fallback_name, str):
+            return fallback_name.lower()
+
+        return ""
+
+    remaining_descriptions.sort(key=_field_description_sort_key)
     reordered_descriptions.extend(remaining_descriptions)
 
     if reordered_descriptions == field_descriptions:
@@ -1165,7 +1171,7 @@ def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, 
         return 0, 0
 
     try:
-        import arcpy
+        import arcpy  # type: ignore
     except Exception:
         arcpy = None
 
@@ -1395,7 +1401,7 @@ def set_cim_layer_definition_visibility(
         return None, False, "Configured visible must be true/false"
 
     try:
-        import arcpy
+        import arcpy  # type: ignore
 
         item_cim = item.getDefinition("V3")
         current_visible = bool(getattr(item_cim, "visibility", False))
@@ -1462,7 +1468,7 @@ def check_and_update_definition_query(
             )
             if current_query == desired_query:
                 return True, False, current_query
-            setattr(item, "definitionQuery", desired_query)
+            item.definitionQuery = desired_query
             return False, True, desired_query
         except Exception as exc:
             LOGGER.debug(
@@ -1691,7 +1697,7 @@ def set_cim_popup_info_fields_by_yml(
             - ``was_updated`` indicates whether CIM was written,
             - ``info_message`` provides a short status summary.
     """
-    import arcpy
+    import arcpy  # type: ignore
 
     layer_name = getattr(layer, "name", "<unknown>")
 
