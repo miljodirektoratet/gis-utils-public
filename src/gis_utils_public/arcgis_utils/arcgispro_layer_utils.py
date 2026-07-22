@@ -4,6 +4,8 @@ Public functions:
 - construct_sde_dataset_path: Build dataset path candidates from layer config.
 - add_layer_from_sde: Add one layer from SDE source.
 - add_sde_layers_and_tables_to_map: Add pre-resolved layer/table entries using explicit SDE mapping.
+- add_group_layer_to_map: Add an empty group layer to a map.
+- move_layers_into_group: Move named layers into an existing group layer.
 - resolve_lyrx_path: Resolve LYRX path for one layer.
 - apply_lyrx_to_layer: Apply LYRX transfer to a map layer.
 - apply_lyrx_to_map_layers: Apply LYRX transfer to map layers.
@@ -293,6 +295,137 @@ def add_sde_layers_and_tables_to_map(
         "layer_total": len(layer_entries),
         "layers_added_count": added_count,
         "layers_skipped_count": skipped_count,
+    }
+
+
+def add_group_layer_to_map(
+    map_obj: Any,
+    group_name: str,
+) -> dict[str, Any]:
+    """Add an empty group layer to the map.
+
+    :param map_obj: ArcGIS Pro map object.
+    :param group_name: Name for the new group layer.
+    :return: Result dictionary with ``added``, ``skipped``, ``group_layer``, and ``error`` keys.
+    """
+    result: dict[str, Any] = {
+        "group_name": group_name,
+        "added": False,
+        "skipped": False,
+        "group_layer": None,
+        "error": None,
+    }
+
+    # Reuse existing group layer when already present.
+    for existing_layer in map_obj.listLayers(group_name):
+        if getattr(existing_layer, "isGroupLayer", False):
+            result["skipped"] = True
+            result["group_layer"] = existing_layer
+            LOGGER.debug(
+                "-> Group layer '%s' already exists; reusing existing group", group_name
+            )
+            return result
+
+    if not hasattr(map_obj, "createGroupLayer"):
+        result["error"] = (
+            "map.createGroupLayer is not available; requires ArcGIS Pro 3.1 or later"
+        )
+        LOGGER.warning(
+            "-> Cannot add group layer '%s': %s", group_name, result["error"]
+        )
+        return result
+
+    try:
+        group_layer = map_obj.createGroupLayer(group_name)
+        result["added"] = True
+        result["group_layer"] = group_layer
+        LOGGER.debug("-> Added group layer '%s'", group_name)
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        LOGGER.warning("-> Failed to add group layer '%s': %s", group_name, exc)
+        return result
+
+
+def move_layers_into_group(
+    map_obj: Any,
+    group_layer_name: str,
+    child_layer_names: list[str],
+) -> dict[str, Any]:
+    """Move named layers into an existing group layer.
+
+    :param map_obj: ArcGIS Pro map object.
+    :param group_layer_name: Name of the target group layer.
+    :param child_layer_names: Ordered list of layer names to move into the group.
+    :return: Summary dictionary with per-layer move results and ``moved_count``.
+    """
+    results: list[dict[str, Any]] = []
+
+    group_layer = next(
+        (
+            lyr
+            for lyr in map_obj.listLayers(group_layer_name)
+            if getattr(lyr, "isGroupLayer", False)
+        ),
+        None,
+    )
+    if group_layer is None:
+        LOGGER.warning(
+            "-> Group layer '%s' not found; cannot move children", group_layer_name
+        )
+        return {
+            "group_layer_name": group_layer_name,
+            "child_layer_names": child_layer_names,
+            "layer_results": results,
+            "moved_count": 0,
+            "error": "Group layer not found",
+        }
+
+    for child_name in child_layer_names:
+        child_result: dict[str, Any] = {
+            "layer_name": child_name,
+            "moved": False,
+            "error": None,
+        }
+        child_layer = next(
+            (
+                lyr
+                for lyr in map_obj.listLayers(child_name)
+                if not getattr(lyr, "isGroupLayer", False)
+            ),
+            None,
+        )
+        if child_layer is None:
+            child_result["error"] = "Layer not found in map"
+            LOGGER.warning(
+                "-> Could not move '%s' into group '%s': layer not found",
+                child_name,
+                group_layer_name,
+            )
+            results.append(child_result)
+            continue
+
+        try:
+            map_obj.moveLayer(group_layer, child_layer, "BOTTOM")
+            child_result["moved"] = True
+            LOGGER.debug("-> Moved '%s' into group '%s'", child_name, group_layer_name)
+        except Exception as exc:
+            child_result["error"] = str(exc)
+            LOGGER.warning(
+                "-> Failed to move '%s' into group '%s': %s",
+                child_name,
+                group_layer_name,
+                exc,
+            )
+        results.append(child_result)
+
+    moved_count = sum(1 for r in results if bool(r.get("moved")))
+    return {
+        "group_layer_name": group_layer_name,
+        "child_layer_names": child_layer_names,
+        "layer_results": results,
+        "moved_count": moved_count,
+        "error": None,
     }
 
 
