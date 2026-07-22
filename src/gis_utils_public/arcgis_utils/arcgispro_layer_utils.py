@@ -352,7 +352,13 @@ def move_layers_into_group(
     group_layer_name: str,
     child_layer_names: list[str],
 ) -> dict[str, Any]:
-    """Move named layers into an existing group layer.
+    """Move named layers into an existing group layer in the given order.
+
+    Placement strategy:
+    - The first child is moved with ``"AFTER"`` relative to the group layer itself,
+      which places it as the first item inside the group.
+    - Each subsequent child is moved with ``"AFTER"`` relative to the previously
+      moved child, preserving the order defined in ``child_layer_names``.
 
     :param map_obj: ArcGIS Pro map object.
     :param group_layer_name: Name of the target group layer.
@@ -381,6 +387,10 @@ def move_layers_into_group(
             "error": "Group layer not found",
         }
 
+    # Reference layer starts as the group itself. After each successful move it becomes
+    # the last successfully placed child so subsequent layers are inserted after it.
+    reference_layer: Any = group_layer
+
     for child_name in child_layer_names:
         child_result: dict[str, Any] = {
             "layer_name": child_name,
@@ -406,8 +416,9 @@ def move_layers_into_group(
             continue
 
         try:
-            map_obj.moveLayer(group_layer, child_layer, "BOTTOM")
+            map_obj.moveLayer(reference_layer, child_layer, "AFTER")
             child_result["moved"] = True
+            reference_layer = child_layer
             LOGGER.debug("-> Moved '%s' into group '%s'", child_name, group_layer_name)
         except Exception as exc:
             child_result["error"] = str(exc)
