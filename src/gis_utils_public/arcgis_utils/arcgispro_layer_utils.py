@@ -352,13 +352,8 @@ def move_layers_into_group(
     group_layer_name: str,
     child_layer_names: list[str],
 ) -> dict[str, Any]:
-    """Move named layers into an existing group layer in the given order.
-
-    Placement strategy:
-    - The first child is moved with ``"AFTER"`` relative to the group layer itself,
-      which places it as the first item inside the group.
-    - Each subsequent child is moved with ``"AFTER"`` relative to the previously
-      moved child, preserving the order defined in ``child_layer_names``.
+    """
+    Move named layers into an existing group layer in the given order.
 
     :param map_obj: ArcGIS Pro map object.
     :param group_layer_name: Name of the target group layer.
@@ -387,9 +382,45 @@ def move_layers_into_group(
             "error": "Group layer not found",
         }
 
-    # Reference layer starts as the group itself. After each successful move it becomes
-    # the last successfully placed child so subsequent layers are inserted after it.
-    reference_layer: Any = group_layer
+    if not hasattr(map_obj, "addLayerToGroup"):
+        LOGGER.warning(
+            "-> Map object does not expose addLayerToGroup; cannot move children into group '%s'",
+            group_layer_name,
+        )
+        return {
+            "group_layer_name": group_layer_name,
+            "child_layer_names": child_layer_names,
+            "layer_results": results,
+            "moved_count": 0,
+            "error": "Map.addLayerToGroup is not available",
+        }
+
+    group_long_name_prefix = f"{group_layer_name}\\"
+
+    def _is_under_target_group(layer_obj: Any) -> bool:
+        """Return True when a layer longName indicates it is nested in target group."""
+        long_name = getattr(layer_obj, "longName", None)
+        return isinstance(long_name, str) and long_name.startswith(
+            group_long_name_prefix
+        )
+
+    # Build move candidates from current map once, then iterate by requested names.
+    child_name_set = {
+        name for name in child_layer_names if isinstance(name, str) and name.strip()
+    }
+    layers_to_move_by_name: dict[str, Any] = {}
+    for layer_obj in map_obj.listLayers():
+        layer_name = getattr(layer_obj, "name", None)
+        if not isinstance(layer_name, str):
+            continue
+        if layer_name not in child_name_set:
+            continue
+        if getattr(layer_obj, "isGroupLayer", False):
+            continue
+        if _is_under_target_group(layer_obj):
+            continue
+        if layer_name not in layers_to_move_by_name:
+            layers_to_move_by_name[layer_name] = layer_obj
 
     for child_name in child_layer_names:
         child_result: dict[str, Any] = {
@@ -397,14 +428,27 @@ def move_layers_into_group(
             "moved": False,
             "error": None,
         }
-        child_layer = next(
+
+        already_grouped = next(
             (
                 lyr
                 for lyr in map_obj.listLayers(child_name)
                 if not getattr(lyr, "isGroupLayer", False)
+                and _is_under_target_group(lyr)
             ),
             None,
         )
+        if already_grouped is not None:
+            child_result["moved"] = True
+            LOGGER.debug(
+                "-> Layer '%s' is already grouped under '%s'",
+                child_name,
+                group_layer_name,
+            )
+            results.append(child_result)
+            continue
+
+        child_layer = layers_to_move_by_name.get(child_name)
         if child_layer is None:
             child_result["error"] = "Layer not found in map"
             LOGGER.warning(
@@ -416,9 +460,33 @@ def move_layers_into_group(
             continue
 
         try:
-            map_obj.moveLayer(reference_layer, child_layer, "AFTER")
+            map_obj.addLayerToGroup(group_layer, child_layer, "BOTTOM")
+
+            grouped_instances = [
+                lyr
+                for lyr in map_obj.listLayers(child_name)
+                if not getattr(lyr, "isGroupLayer", False)
+                and _is_under_target_group(lyr)
+            ]
+            if not grouped_instances:
+                raise RuntimeError(
+                    "Layer was not nested under group after addLayerToGroup"
+                )
+
+            # Remove top-level duplicate(s) if ArcGIS kept a copy outside the group.
+            top_level_duplicates = [
+                lyr
+                for lyr in map_obj.listLayers(child_name)
+                if not getattr(lyr, "isGroupLayer", False)
+                and not _is_under_target_group(lyr)
+            ]
+            for duplicate_layer in top_level_duplicates:
+                try:
+                    map_obj.removeLayer(duplicate_layer)
+                except Exception:
+                    pass
+
             child_result["moved"] = True
-            reference_layer = child_layer
             LOGGER.debug("-> Moved '%s' into group '%s'", child_name, group_layer_name)
         except Exception as exc:
             child_result["error"] = str(exc)

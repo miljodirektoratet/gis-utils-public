@@ -323,12 +323,30 @@ def report_arcgispro_project_metadata(
             map_layers = [
                 layer_obj
                 for layer_obj in map_obj.listLayers()
-                if not layer_obj.isGroupLayer and not layer_obj.isBasemapLayer
+                if not layer_obj.isBasemapLayer
             ]
             map_tables = map_obj.listTables()
-            out_msg("    layer_count: %s" % len(map_layers))
 
-            for layer_obj in map_layers:
+            def _is_top_level_layer(layer_obj: Any) -> bool:
+                """Return True when a layer is not nested under a group layer.
+
+                :param layer_obj: ArcGIS layer object.
+                :return: True when the layer is top-level in the map TOC.
+                """
+                long_name = getattr(layer_obj, "longName", None)
+                if not isinstance(long_name, str) or not long_name:
+                    long_name = str(getattr(layer_obj, "name", "") or "")
+                return "\\" not in long_name
+
+            def _print_layer_tree(
+                layer_obj: Any, depth: int = 0
+            ) -> tuple[int, int, int]:
+                """Print one layer and recursively print child layers.
+
+                :param layer_obj: ArcGIS layer object.
+                :param depth: Nesting depth where 0 is top-level.
+                :return: Tuple ``(total_count, group_count, feature_count)``.
+                """
                 service_id = "-"
                 try:
                     layer_cim = layer_obj.getDefinition("V3")
@@ -338,11 +356,53 @@ def report_arcgispro_project_metadata(
                 except Exception:
                     pass
 
+                indent = "      " + ("  " * depth)
+                is_group = bool(getattr(layer_obj, "isGroupLayer", False))
+
+                if is_group:
+                    out_msg("%s[%s]: %s [group]" % (indent, service_id, layer_obj.name))
+                    total_count = 1
+                    group_count = 1
+                    feature_count = 0
+                    try:
+                        for child_layer in layer_obj.listLayers():
+                            child_total, child_groups, child_features = (
+                                _print_layer_tree(
+                                    child_layer,
+                                    depth + 1,
+                                )
+                            )
+                            total_count += child_total
+                            group_count += child_groups
+                            feature_count += child_features
+                    except Exception:
+                        pass
+                    return total_count, group_count, feature_count
+
                 fields_text = _format_visible_total_fields_for_layer(layer_obj)
                 out_msg(
-                    "      [%s]: %s [fields: %s]"
-                    % (service_id, layer_obj.name, fields_text)
+                    "%s[%s]: %s [fields: %s]"
+                    % (indent, service_id, layer_obj.name, fields_text)
                 )
+                return 1, 0, 1
+
+            top_level_layers = [
+                layer_obj for layer_obj in map_layers if _is_top_level_layer(layer_obj)
+            ]
+
+            layer_total_count = 0
+            group_layer_count = 0
+            feature_layer_count = 0
+            for layer_obj in top_level_layers:
+                total_count, groups_count, features_count = _print_layer_tree(layer_obj)
+                layer_total_count += total_count
+                group_layer_count += groups_count
+                feature_layer_count += features_count
+
+            out_msg(
+                "    layer_count: %s (groups=%s, feature_layers=%s)"
+                % (layer_total_count, group_layer_count, feature_layer_count)
+            )
 
             out_msg("    table_count: %s" % len(map_tables))
             for table_obj in map_tables:
