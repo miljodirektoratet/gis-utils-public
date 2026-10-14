@@ -355,6 +355,9 @@ def move_layers_into_group(
     """
     Move named layers into an existing group layer in the given order.
 
+    Group layers are supported, except the target and its ancestors. Only the
+    selected source is removed after grouping; cleanup failures are reported.
+
     :param map_obj: ArcGIS Pro map object.
     :param group_layer_name: Name of the target group layer.
     :param child_layer_names: Ordered list of layer names to move into the group.
@@ -395,7 +398,8 @@ def move_layers_into_group(
             "error": "Map.addLayerToGroup is not available",
         }
 
-    group_long_name_prefix = f"{group_layer_name}\\"
+    # Ensure it uses full group path Parent \ParentGroup\ChildGroup for nested groups
+    group_long_name_prefix = f"{group_layer.longName}\\"
 
     def _is_under_target_group(layer_obj: Any) -> bool:
         """Return True when a layer longName indicates it is nested in target group."""
@@ -409,13 +413,22 @@ def move_layers_into_group(
         name for name in child_layer_names if isinstance(name, str) and name.strip()
     }
     layers_to_move_by_name: dict[str, Any] = {}
+    blocked_layer_names: set[str] = set()
     for layer_obj in map_obj.listLayers():
         layer_name = getattr(layer_obj, "name", None)
         if not isinstance(layer_name, str):
             continue
         if layer_name not in child_name_set:
             continue
-        if getattr(layer_obj, "isGroupLayer", False):
+        layer_long_name = getattr(layer_obj, "longName", None)
+        if getattr(layer_obj, "isGroupLayer", False) and (
+            layer_long_name == group_layer.longName
+            or (
+                isinstance(layer_long_name, str)
+                and group_layer.longName.startswith(f"{layer_long_name}\\")
+            )
+        ):
+            blocked_layer_names.add(layer_name)
             continue
         if _is_under_target_group(layer_obj):
             continue
@@ -433,7 +446,7 @@ def move_layers_into_group(
             (
                 lyr
                 for lyr in map_obj.listLayers(child_name)
-                if not getattr(lyr, "isGroupLayer", False)
+                if getattr(lyr, "name", None) == child_name
                 and _is_under_target_group(lyr)
             ),
             None,
@@ -450,22 +463,28 @@ def move_layers_into_group(
 
         child_layer = layers_to_move_by_name.get(child_name)
         if child_layer is None:
-            child_result["error"] = "Layer not found in map"
+            child_result["error"] = (
+                "Cannot move the target group or its ancestor into itself"
+                if child_name in blocked_layer_names
+                else "Layer not found in map"
+            )
             LOGGER.warning(
-                "-> Could not move '%s' into group '%s': layer not found",
+                "-> Could not move '%s' into group '%s': %s",
                 child_name,
                 group_layer_name,
+                child_result["error"],
             )
             results.append(child_result)
             continue
 
         try:
+            source_uri = getattr(child_layer, "URI", None)
             map_obj.addLayerToGroup(group_layer, child_layer, "BOTTOM")
 
             grouped_instances = [
                 lyr
                 for lyr in map_obj.listLayers(child_name)
-                if not getattr(lyr, "isGroupLayer", False)
+                if getattr(lyr, "name", None) == child_name
                 and _is_under_target_group(lyr)
             ]
             if not grouped_instances:
@@ -473,18 +492,20 @@ def move_layers_into_group(
                     "Layer was not nested under group after addLayerToGroup"
                 )
 
-            # Remove top-level duplicate(s) if ArcGIS kept a copy outside the group.
-            top_level_duplicates = [
-                lyr
-                for lyr in map_obj.listLayers(child_name)
-                if not getattr(lyr, "isGroupLayer", False)
-                and not _is_under_target_group(lyr)
-            ]
-            for duplicate_layer in top_level_duplicates:
-                try:
-                    map_obj.removeLayer(duplicate_layer)
-                except Exception:
-                    pass
+            # Remove only the selected source if ArcGIS kept it outside the group.
+            source_still_outside = any(
+                not _is_under_target_group(lyr)
+                and (
+                    lyr is child_layer
+                    or (
+                        source_uri is not None
+                        and getattr(lyr, "URI", None) == source_uri
+                    )
+                )
+                for lyr in map_obj.listLayers()
+            )
+            if source_still_outside:
+                map_obj.removeLayer(child_layer)
 
             child_result["moved"] = True
             LOGGER.debug("-> Moved '%s' into group '%s'", child_name, group_layer_name)
@@ -1804,22 +1825,52 @@ def set_cim_feature_table_display_field(
     layer: Any,
     display_field_name: Any,
 ) -> tuple[Any, bool, str]:
-    """Set CIM display field when configured field exists on layer.
+    """Set the configured display field or the first field in the layer order.
 
     Updates CIM object ``CIMVectorLayer.featureTable.displayField``.
+    When no display field is configured, use the first named field description.
+    Store the field name, not its alias; existing field aliases are preserved.
     Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
     :param layer: ArcGIS layer object.
-    :param display_field_name: Configured display field.
+    :param display_field_name: Configured display field, or None for the first field.
     :return: Tuple ``(is_correct, was_updated, info_message)``.
     """
     layer_name = getattr(layer, "name", "<unknown>")
     if not isinstance(display_field_name, str) or not display_field_name.strip():
+        try:
+            layer_cim = layer.getDefinition("V3")
+            feature_table = getattr(layer_cim, "featureTable", None)
+            field_descriptions = getattr(feature_table, "fieldDescriptions", None)
+            display_field_name = next(
+                (
+                    field_name
+                    for description in field_descriptions or []
+                    if isinstance(
+                        field_name := getattr(description, "fieldName", None), str
+                    )
+                    and field_name.strip()
+                ),
+                None,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "set_cim_feature_table_display_field: failed to resolve first field for '%s': %s",
+                layer_name,
+                exc,
+            )
+            return None, False, f"Could not resolve first display field: {exc}"
+        if display_field_name is None:
+            return (
+                None,
+                False,
+                "No field descriptions available for default display field",
+            )
         LOGGER.debug(
-            "set_cim_feature_table_display_field: skip '%s' (no display_field configured)",
+            "set_cim_feature_table_display_field: use first field for '%s': %s",
             layer_name,
+            display_field_name,
         )
-        return None, False, "No display_field configured"
 
     requested = display_field_name.strip()
     requested_normalized = normalize_field_name(requested)
@@ -1892,8 +1943,8 @@ def set_cim_popup_info_fields_by_yml(
 
     Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` and populates the
     ``fields`` array with all visible field names from ``featureTable.fieldDescriptions``.
-    By default, popup title and caption are empty. They are only set when
-    overrides are configured.
+    By default, the popup title uses the display-field value token, or is empty
+    when no display field exists. The caption is empty unless configured.
 
     Matches ArcGIS Server REST API expectations for popup configuration.
     Note that popup field order is only visible in ArcGIS Pro and not reflected when published as Map Server or Feature Server
@@ -1901,7 +1952,7 @@ def set_cim_popup_info_fields_by_yml(
     https://support.esri.com/en-us/knowledge-base/problem-pop-up-configuration-from-arcgis-pro-is-not-ret-000034868
 
     :param layer: ArcGIS layer object.
-    :param popup_title_override: Optional configured popup title override.
+    :param popup_title_override: Optional title overriding the display-field token.
     :param popup_description_template: Optional popup description template.
             Supports tokens ``{display_field_label}`` and ``{display_field_value}``.
     :return: Tuple ``(is_correct, was_updated, info_message)`` where:
@@ -1935,10 +1986,7 @@ def set_cim_popup_info_fields_by_yml(
             else None
         )
 
-        # Popup title defaults to empty and is only set when configured.
-        expected_title = configured_popup_title or ""
-
-        # Resolve display-field token and label for popup caption.
+        # Resolve display-field token and label for popup title and caption.
         display_field_name = (
             getattr(feature_table, "displayField", None)
             if feature_table is not None
@@ -1948,6 +1996,7 @@ def set_cim_popup_info_fields_by_yml(
         if isinstance(display_field_name, str) and display_field_name.strip():
             display_field_token = f"{{{display_field_name}}}"
 
+        expected_title = configured_popup_title or display_field_token
         display_field_label = ""
 
         # Extract visible field names from featureTable.fieldDescriptions
@@ -2005,6 +2054,8 @@ def set_cim_popup_info_fields_by_yml(
                 if (
                     current_use_layer_fields is True
                     and current_title == expected_title
+                    and getattr(current_popup, "showTitle", None)
+                    == bool(expected_title)
                     and current_fields == visible_field_names
                     and current_caption == caption_html
                 ):
@@ -2017,7 +2068,7 @@ def set_cim_popup_info_fields_by_yml(
                     return (
                         True,
                         False,
-                        f"Popup configured with {len(visible_field_names)} visible fields",
+                        f"Popup configured with {len(visible_field_names)} visible fields, title {expected_title!r}",
                     )
 
         # Build CIMTableMediaInfo with useLayerFields=True and explicit fields array
@@ -2037,7 +2088,7 @@ def set_cim_popup_info_fields_by_yml(
                 "CIMPopupInfo", "V3"
             )
 
-        # Configure popup with visible fields, static title, and display-field caption.
+        # Configure popup with visible fields, resolved title, and display-field caption.
         table_media.useLayerFields = True
         table_media.fields = visible_field_names
         table_media.caption = caption_html
