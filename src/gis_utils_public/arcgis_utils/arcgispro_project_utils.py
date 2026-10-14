@@ -366,6 +366,11 @@ def report_arcgispro_project_metadata(
                     feature_count = 0
                     try:
                         for child_layer in layer_obj.listLayers():
+                            if (
+                                child_layer.longName.rpartition("\\")[0]
+                                != layer_obj.longName
+                            ):
+                                continue
                             child_total, child_groups, child_features = (
                                 _print_layer_tree(
                                     child_layer,

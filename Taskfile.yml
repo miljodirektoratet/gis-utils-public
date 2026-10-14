@@ -9,12 +9,12 @@ tasks:
   install:
     desc: Install dependencies and setup development environment
     cmds:
-      - uv sync --group dev
+      - uv sync --frozen --group dev
 
   pre-commit-install:
     desc: Install pre-commit hooks
     cmds:
-      - uv run pre-commit install
+      - uv run --frozen pre-commit install
     status:
       - test -f .git/hooks/pre-commit
 
@@ -22,12 +22,12 @@ tasks:
   pre-commit:
     desc: Run pre-commit hooks on all files
     cmds:
-      - uv run pre-commit run --all-files
+      - uv run --frozen pre-commit run --all-files
 
   pre-commit-uninstall:
     desc: Uninstall pre-commit hooks
     cmds:
-      - uv run pre-commit uninstall
+      - uv run --frozen pre-commit uninstall
 
   check:
     desc: Run all code quality checks
@@ -36,38 +36,38 @@ tasks:
   format:
     desc: Format code with Ruff
     cmds:
-      - uv run ruff format
+      - uv run --frozen ruff format
 
   lint:
     desc: Run linting checks
     cmds:
-      - uv run ruff check
+      - uv run --frozen ruff check
 
   lint-fix:
     desc: Run linting checks and auto-fix issues
     cmds:
-      - uv run ruff check --fix
+      - uv run --frozen ruff check --fix
 
   typecheck:
     desc: Run type checking with mypy
     cmds:
-      - uv run mypy src/
+      - uv run --frozen mypy src/
 
   deps-check:
     desc: Check for dependency issues
     cmds:
-      - uv run deptry .
+      - uv run --frozen deptry .
 
   # Testing
   test:
     desc: Run tests
     cmds:
-      - uv run pytest
+      - uv run --frozen pytest
 
   test-cov:
     desc: Run tests with coverage
     cmds:
-      - uv run pytest --cov
+      - uv run --frozen pytest --cov
 
   # Build and Release
   build:
@@ -79,9 +79,12 @@ tasks:
   clean:
     desc: Clean build artifacts and caches with python for platform independence
     cmds:
-      - python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['.pytest_cache','.mypy_cache','.ruff_cache','htmlcov']]"
-      - python -c "import pathlib; [p.unlink() for p in pathlib.Path('.').glob('.coverage*') if p.is_file()]"
-      - python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]"
+      - python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p
+        in ['.pytest_cache','.mypy_cache','.ruff_cache','htmlcov']]"
+      - python -c "import pathlib; [p.unlink() for p in
+        pathlib.Path('.').glob('.coverage*') if p.is_file()]"
+      - python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p
+        in pathlib.Path('.').rglob('__pycache__')]"
 
   # Development
   run:
@@ -117,7 +120,8 @@ tasks:
       - git tag {{.VERSION}}
       - git push origin {{.VERSION}}
       - echo "Tagged and pushed {{.VERSION}}"
-      - echo "CD workflows triggered. Monitor at https://github.com/miljodirektoratet/ml-ajourhold/actions"
+      - echo "CD workflows triggered. Monitor at
+        https://github.com/miljodirektoratet/ml-ajourhold/actions"
     requires:
       vars: [VERSION]
 
