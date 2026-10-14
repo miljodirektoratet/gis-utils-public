@@ -1,10 +1,17 @@
 # gis-utils-public
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![GitHub Release](https://img.shields.io/github/v/release/miljodirektoratet/gis-utils-public?logo=python)](https://github.com/miljodirektoratet/gis-utils-public/releases) [![CI Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/gis-utils-public/ci-python.yml?branch=main&label=CI%20Python&style=flat)](https://github.com/miljodirektoratet/gis-utils-public/actions/workflows/ci-python.yml) [![CD Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/gis-utils-public/cd-python.yml?label=CD%20Python&style=flat)](https://github.com/miljodirektoratet/gis-utils-public/actions/workflows/cd-python.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub Release](https://img.shields.io/github/v/release/miljodirektoratet/gis-utils-public?logo=python)](https://github.com/miljodirektoratet/gis-utils-public/releases)
+[![CI Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/gis-utils-public/ci-python.yml?branch=main&label=CI%20Python&style=flat)](https://github.com/miljodirektoratet/gis-utils-public/actions/workflows/ci-python.yml)
+[![CD Python](https://img.shields.io/github/actions/workflow/status/miljodirektoratet/gis-utils-public/cd-python.yml?label=CD%20Python&style=flat)](https://github.com/miljodirektoratet/gis-utils-public/actions/workflows/cd-python.yml)
 
-GIS utilities for the GIS platform at the Norwegian Environment Agency (miljødirektoratet).
+GIS utilities for the GIS platform at the Norwegian Environment Agency
+(miljødirektoratet).
 
-This package contains both **open-gis code** (portable to any Python environment) and **ArcGIS-dependent code** (requires ArcGIS Pro or ArcGIS Online). The design ensures that open-gis functionality works anywhere, while ArcGIS code is only loaded when explicitly used.
+This package contains both **open-gis code** (portable to any Python environment) and
+**ArcGIS-dependent code** (requires ArcGIS Pro or ArcGIS Online). The design ensures
+that open-gis functionality works anywhere, while ArcGIS code is only loaded when
+explicitly used.
 
 **Table of Contents**
 
@@ -74,9 +81,11 @@ agol_add_users_to_group(gis, oidc_users, arcgis_users, group_name)
 
 ### Non-ArcGIS Environments (Linux, macOS, Windows without ArcGIS Pro)
 
-Use open-gis code only (e.g. don't load functions from arcgis_utils). The package works in any Python 3.11+ environment.
+Use open-gis code only (e.g. don't load functions from arcgis_utils). The package works
+in any Python 3.11+ environment.
 
-**Recommended: Use `uv` for faster, simpler dependency management.** [Install uv](https://docs.astral.sh/uv/getting-started/) if you don't have it.
+**Recommended: Use `uv` for faster, simpler dependency management.**
+[Install uv](https://docs.astral.sh/uv/getting-started/) if you don't have it.
 
 **Option 1: Install with `uv` (recommended, fast)**
 
@@ -113,11 +122,13 @@ pip install "https://github.com/miljodirektoratet/gis-utils-public/archive/refs/
 pip install "https://github.com/miljodirektoratet/gis-utils-public/archive/refs/tags/v0.0.6.zip"
 ```
 
-ArcGIS modules are not loaded on package install, so no errors occur even though they're part of the package.
+ArcGIS modules are not loaded on package install, so no errors occur even though they're
+part of the package.
 
 ### ArcGIS Pro Environments (Windows with ArcGIS Pro 3.5+)
 
-Use both open-gis and ArcGIS code. **Conda is required** because ArcGIS and ArcPy are only available from Esri's conda channel (not pip).
+Use both open-gis and ArcGIS code. **Conda is required** because ArcGIS and ArcPy are
+only available from Esri's conda channel (not pip).
 
 ```powershell
 # Create a Conda environment with ArcGIS Pro 3.5 (required for ArcGIS/ArcPy)
@@ -148,14 +159,19 @@ arcgis_utils.agol_user_admin.agol_add_users_to_group(
 
 ### ArcGIS Online Notebooks
 
-Load individual modules to reduce credits, see [demo_upload_module_to_agol.ipynb](./notebooks/demo_upload_module_to_agol.ipynb) for complete examples.
+Load individual modules to reduce credits, see
+[demo_upload_module_to_agol.ipynb](./notebooks/demo_upload_module_to_agol.ipynb) for
+complete examples.
 
 ## Guidelines
 
-- **Code organization**: Keep reusable modules in `src/gis_utils_public/`. Open-gis code goes in root; ArcGIS-dependent code goes in `arcgis_utils/`.
-- **Public code only**: Share only public-safe helper code. Sensitive tasks or infrastructure code stay internal.
+- **Code organization**: Keep reusable modules in `src/gis_utils_public/`. Open-gis code
+  goes in root; ArcGIS-dependent code goes in `arcgis_utils/`.
+- **Public code only**: Share only public-safe helper code. Sensitive tasks or
+  infrastructure code stay internal.
 - **Security practices**:
-  - Never commit passwords, tokens, or other sensitive data. Use key vaults for secret management.
+  - Never commit passwords, tokens, or other sensitive data. Use key vaults for secret
+    management.
   - Secret scanning, CodeQL, and Dependabot are enabled.
 
 ### Repository Structure
@@ -177,7 +193,8 @@ Load individual modules to reduce credits, see [demo_upload_module_to_agol.ipynb
 
 ## Package Installation
 
-For detailed installation instructions and examples for different environments, see the [Installation & Usage](#installation--usage) section above.
+For detailed installation instructions and examples for different environments, see the
+[Installation & Usage](#installation--usage) section above.
 
 **Quick start for non-ArcGIS environments:**
 
@@ -205,7 +222,8 @@ python -m gis_utils_public
 
 ### Open-GIS Development (Any Python 3.11+)
 
-For developing or testing open-gis code without ArcGIS Pro. **`uv` is recommended** for fast, reproducible development environments.
+For developing or testing open-gis code without ArcGIS Pro. **`uv` is recommended** for
+fast, reproducible development environments.
 
 ```bash
 # Create virtual environment (optional, but recommended)
@@ -217,10 +235,7 @@ source .venv/bin/activate  # Linux/macOS
 .venv\Scripts\activate     # Windows
 
 # Install with all development dependencies using uv (recommended)
-uv pip install -e ".[dev]"
-
-# Or use pip if you prefer
-pip install -e ".[dev]"
+uv pip install -e . --group dev
 
 # Run tests
 pytest
@@ -231,7 +246,8 @@ ruff check src/
 
 ### ArcGIS Pro Development
 
-For developing or testing ArcGIS-dependent code. **Conda is required** because ArcGIS/ArcPy are only available from Esri's conda channel.
+For developing or testing ArcGIS-dependent code. **Conda is required** because
+ArcGIS/ArcPy are only available from Esri's conda channel.
 
 ```powershell
 # Create Conda environment (project-local, required for ArcGIS/ArcPy)
@@ -248,7 +264,11 @@ pytest
 ruff check src/
 ```
 
-**Note:** ArcGIS and ArcPy are conda-only packages from Esri's conda channel (not available on PyPI). They must be installed through the `environment.yml` conda environment. The `environment.yml` file includes all pip dependencies from `pyproject.toml[dev]` for consistency. Use `conda` for ArcGIS development; use `uv` for open-gis development.
+**Note:** ArcGIS and ArcPy are conda-only packages from Esri's conda channel (not
+available on PyPI). They must be installed through the `environment.yml` conda
+environment. The `environment.yml` file includes all pip dependencies from
+`pyproject.toml[dev]` for consistency. Use `conda` for ArcGIS development; use `uv` for
+open-gis development.
 
 ### Existing ArcGIS Pro Environment
 
@@ -272,9 +292,12 @@ pip install -e "git+https://github.com/miljodirektoratet/gis-utils-public.git#eg
 
 ## Deployment (Git Tags)
 
-The Python release workflow is tag-driven. Pushing a tag matching `v*.*.*` triggers `CD | Python Build and Publish`, which builds package artifacts and uploads them to GitHub Releases.
+The Python release workflow is tag-driven. Pushing a tag matching `v*.*.*` triggers
+`CD | Python Build and Publish`, which builds package artifacts and uploads them to
+GitHub Releases.
 
-Before creating a new release tag, update the package version in `pyproject.toml` (`[project].version`) to match the tag version.
+Before creating a new release tag, update the package version in `pyproject.toml`
+(`[project].version`) to match the tag version.
 
 ```powershell
 # List tags
