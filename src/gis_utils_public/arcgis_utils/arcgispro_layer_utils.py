@@ -1284,9 +1284,11 @@ def get_field_names_from_yml(layer: Any, configured_cols: Any) -> tuple[list[str
 def order_cim_feature_table_field_descriptions_by_yml(
     layer: Any, desired_field_order: list[str]
 ) -> int | None:
-    """Reorder CIM feature-table field descriptions by YAML order.
+    """Order configured fields first, remaining fields alphabetically, system fields last.
 
     Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions``.
+    System-like fields use a fixed trailing order even when listed in YAML.
+    This function does not change field visibility or rename fields.
     Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
     :param layer: ArcGIS layer object.
@@ -1294,13 +1296,6 @@ def order_cim_feature_table_field_descriptions_by_yml(
     :return: Reordered field count, 0 if unchanged, or None when unavailable.
     """
     layer_name = getattr(layer, "name", "<unknown>")
-    if not desired_field_order:
-        LOGGER.debug(
-            "order_cim_feature_table_field_descriptions_by_yml: skip '%s' (no cols configured)",
-            layer_name,
-        )
-        return 0
-
     _, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
     if not field_descriptions:
         LOGGER.debug(
@@ -1309,6 +1304,25 @@ def order_cim_feature_table_field_descriptions_by_yml(
         )
         return None
 
+    system_field_order = {
+        name: position
+        for position, name in enumerate(
+            (
+                "objectid",
+                "fid",
+                "join_count",
+                "target_fid",
+                "globalid",
+                "guid",
+                "geometry",
+                "shape",
+                "shape_length",
+                "shape_area",
+                "st_area(shape)",
+                "st_perimeter(shape)",
+            )
+        )
+    }
     field_by_name: dict[str, Any] = {}
     for field_description in field_descriptions:
         raw_name = getattr(field_description, "fieldName", None) or getattr(
@@ -1323,17 +1337,26 @@ def order_cim_feature_table_field_descriptions_by_yml(
 
     for field_name in desired_field_order:
         normalized = normalize_field_name(field_name)
-        if normalized in field_by_name:
+        if (
+            normalized in field_by_name
+            and normalized not in system_field_order
+            and normalized not in seen_fields
+        ):
             reordered_descriptions.append(field_by_name[normalized])
             seen_fields.add(normalized)
 
     remaining_descriptions = []
+    system_descriptions = []
     for field_description in field_descriptions:
         raw_name = getattr(field_description, "fieldName", None) or getattr(
             field_description, "name", None
         )
         normalized = normalize_field_name(raw_name)
-        if normalized not in seen_fields:
+        if normalized in system_field_order:
+            system_descriptions.append(
+                (system_field_order[normalized], field_description)
+            )
+        elif normalized not in seen_fields:
             remaining_descriptions.append(field_description)
 
     def _field_description_sort_key(field_description: Any) -> str:
@@ -1349,6 +1372,8 @@ def order_cim_feature_table_field_descriptions_by_yml(
 
     remaining_descriptions.sort(key=_field_description_sort_key)
     reordered_descriptions.extend(remaining_descriptions)
+    system_descriptions.sort(key=lambda entry: entry[0])
+    reordered_descriptions.extend(description for _, description in system_descriptions)
 
     if reordered_descriptions == field_descriptions:
         LOGGER.debug(
