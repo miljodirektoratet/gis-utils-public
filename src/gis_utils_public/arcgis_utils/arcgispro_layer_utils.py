@@ -3,18 +3,20 @@
 Public functions:
 - construct_sde_dataset_path: Build dataset path candidates from layer config.
 - add_layer_from_sde: Add one layer from SDE source.
-- add_layers_from_config_sde_to_map: Add YAML-configured layers from SDE to map.
+- add_sde_layers_and_tables_to_map: Add pre-resolved layer/table entries using explicit SDE mapping.
+- add_group_layer_to_map: Add an empty group layer to a map.
+- move_layers_into_group: Move named layers into an existing group layer.
 - resolve_lyrx_path: Resolve LYRX path for one layer.
 - apply_lyrx_to_layer: Apply LYRX transfer to a map layer.
-- apply_lyrx_to_map_layers_from_config: Apply LYRX transfer to YAML-defined map layers.
+- apply_lyrx_to_map_layers: Apply LYRX transfer to map layers.
 - export_map_layers_to_lyrx: Export full layer definitions to LYRX files.
-- export_map_layers_to_lyrx_from_config: Export full layer definitions to LYRX files.
-- ensure_cim_field_descriptions: Init CIM field descriptions from source fields.
-- reorder_layer_fields: Reorder fields using config-first ordering.
-- set_only_fields_visible: Apply visibility from configured field list.
-- check_and_update_service_id: Check and update service layer id.
-- configure_display_field: Configure display field from layer config.
-- configure_popup_fields_from_visible: Configure popup fields from visible config.
+- set_cim_feature_table_field_descriptions_from_sde: Rebuild CIM featureTable.fieldDescriptions from SDE source.
+- order_cim_feature_table_field_descriptions_by_yml: Order fields using config-first ordering.
+- set_cim_feature_table_field_descriptions_visibility_by_yml: Set field visibility from configured field list.
+- set_cim_layer_definition_visibility: Set CIM layer/table visibility from config.
+- set_cim_layer_definition_service_id: Check and update service layer id.
+- set_cim_feature_table_display_field: Configure display field from layer config.
+- set_cim_popup_info_fields_by_yml: Configure popup to inherit visible fields from layer (useLayerFields=True).
 """
 
 import logging
@@ -23,1727 +25,2094 @@ import re
 from typing import Any
 
 from .field_utils import (
-	generate_field_alias,
-	is_system_field,
-	normalize_field_alias_overrides,
-	normalize_field_name,
-)
-from .yaml_config_arcgis import (
-	iter_map_service_layer_entries,
-	resolve_layer_sde_connection_path,
+    generate_field_alias,
+    normalize_field_name,
 )
 
 LOGGER = logging.getLogger(__name__)
 
 
-# Use one result format for add layer in all cases.
 def _create_add_layer_from_sde_result(
-	layer_name: str,
-	sde_connection_path: str | None,
+    layer_name: str,
+    sde_connection_path: str | None,
 ) -> dict[str, Any]:
-	"""Build default result object for add-layer-from-SDE operations.
+    """Build default result object for add-layer-from-SDE operations.
 
-	:param layer_name: Layer name.
-	:param sde_connection_path: Resolved SDE path if available.
-	:return: Default result dictionary with stable schema.
-	"""
-	return {
-		"layer_name": layer_name,
-		"sde_connection": sde_connection_path,
-		"dataset_path": None,
-		"tried_paths": [],
-		"added": False,
-		"skipped": False,
-		"error": None,
-	}
+    :param layer_name: Layer name.
+    :param sde_connection_path: Resolved SDE path if available.
+    :return: Default result dictionary with stable schema.
+    """
+    return {
+        "layer_name": layer_name,
+        "sde_connection": sde_connection_path,
+        "dataset_path": None,
+        "tried_paths": [],
+        "added": False,
+        "skipped": False,
+        "error": None,
+    }
 
 
-# Get existing layer names once so reruns do not add duplicates.
 def _get_existing_map_layer_names(map_obj: Any) -> set[str]:
-	"""Return case-insensitive set of existing layer and table names in map.
+    """Return case-insensitive set of existing layer and table names in map.
 
-	:param map_obj: ArcGIS Pro map object.
-	:return: Set of existing layer/table names normalized with ``casefold()``.
-	"""
-	existing_names: set[str] = set()
-	for layer in map_obj.listLayers():
-		layer_name = getattr(layer, "name", None)
-		if isinstance(layer_name, str) and layer_name.strip():
-			existing_names.add(layer_name.strip().casefold())
-	for table in map_obj.listTables():
-		table_name = getattr(table, "name", None)
-		if isinstance(table_name, str) and table_name.strip():
-			existing_names.add(table_name.strip().casefold())
-	return existing_names
+    :param map_obj: ArcGIS Pro map object.
+    :return: Set of existing layer/table names normalized with ``casefold()``.
+    """
+    existing_names: set[str] = set()
+    for layer in map_obj.listLayers():
+        layer_name = getattr(layer, "name", None)
+        if isinstance(layer_name, str) and layer_name.strip():
+            existing_names.add(layer_name.strip().casefold())
+    for table in map_obj.listTables():
+        table_name = getattr(table, "name", None)
+        if isinstance(table_name, str) and table_name.strip():
+            existing_names.add(table_name.strip().casefold())
+    return existing_names
 
 
-# Use one result format for LYRX path checks.
 def _create_lyrx_path_resolution_result(
-	layer_name: str,
-	lyrx_dir: str,
-	allow_suffix_match: bool,
-	recurse_subfolders: bool,
+    layer_name: str,
+    lyrx_dir: str,
+    allow_suffix_match: bool,
+    recurse_subfolders: bool,
 ) -> dict[str, Any]:
-	"""Build default result object for LYRX path resolution.
+    """Build default result object for LYRX path resolution.
 
-	:param layer_name: Layer name.
-	:param lyrx_dir: Root LYRX directory.
-	:param allow_suffix_match: Whether suffix matching is enabled.
-	:param recurse_subfolders: Whether recursive lookup is enabled.
-	:return: Default result dictionary with stable schema.
-	"""
-	return {
-		"layer_name": layer_name,
-		"lyrx_dir": lyrx_dir,
-		"recurse_subfolders": recurse_subfolders,
-		"allow_suffix_match": allow_suffix_match,
-		"lyrx_path": None,
-		"match_type": None,
-		"candidate_count": 0,
-		"candidate_paths": [],
-	}
+    :param layer_name: Layer name.
+    :param lyrx_dir: Root LYRX directory.
+    :param allow_suffix_match: Whether suffix matching is enabled.
+    :param recurse_subfolders: Whether recursive lookup is enabled.
+    :return: Default result dictionary with stable schema.
+    """
+    return {
+        "layer_name": layer_name,
+        "lyrx_dir": lyrx_dir,
+        "recurse_subfolders": recurse_subfolders,
+        "allow_suffix_match": allow_suffix_match,
+        "lyrx_path": None,
+        "match_type": None,
+        "candidate_count": 0,
+        "candidate_paths": [],
+    }
 
 
-# Use one result format for apply LYRX.
 def _create_apply_lyrx_to_layer_result(
-	layer_name: str,
-	transfer_mode: str,
-	resolve_result: dict[str, Any],
+    layer_name: str,
+    transfer_mode: str,
+    resolve_result: dict[str, Any],
 ) -> dict[str, Any]:
-	"""Build default result object for apply-LYRX operations.
+    """Build default result object for apply-LYRX operations.
 
-	:param layer_name: Layer name.
-	:param transfer_mode: LYRX transfer mode.
-	:param resolve_result: LYRX path resolution result.
-	:return: Default result dictionary with stable schema.
-	"""
-	return {
-		"layer_name": layer_name,
-		"transfer_mode": transfer_mode,
-		"lyrx_path": resolve_result.get("lyrx_path"),
-		"match_type": resolve_result.get("match_type"),
-		"candidate_count": resolve_result.get("candidate_count"),
-		"applied": False,
-		"error": None,
-	}
+    :param layer_name: Layer name.
+    :param transfer_mode: LYRX transfer mode.
+    :param resolve_result: LYRX path resolution result.
+    :return: Default result dictionary with stable schema.
+    """
+    return {
+        "layer_name": layer_name,
+        "transfer_mode": transfer_mode,
+        "lyrx_path": resolve_result.get("lyrx_path"),
+        "match_type": resolve_result.get("match_type"),
+        "candidate_count": resolve_result.get("candidate_count"),
+        "applied": False,
+        "error": None,
+    }
 
 
 def construct_sde_dataset_path(
-	sde_connection_path: str,
-	layer_config: dict[str, Any],
+    sde_connection_path: str,
+    layer_config: dict[str, Any],
 ) -> tuple[str, list[str]]:
-	"""Build and resolve ArcGIS dataset path from layer source config.
+    """Build and resolve ArcGIS dataset path from layer source config.
 
-	:param sde_connection_path: Resolved SDE connection file path.
-	:param layer_config: Per-layer config dictionary.
-	:return: Tuple of resolved dataset path candidate and all tried paths.
-	:raises ValueError: If required dataset config is missing.
-	"""
-	import arcpy
+    :param sde_connection_path: Resolved SDE connection file path.
+    :param layer_config: Per-layer config dictionary.
+    :return: Tuple of resolved dataset path candidate and all tried paths.
+    :raises ValueError: If required dataset config is missing.
+    """
+    import arcpy  # type: ignore
 
-	source_cfg = (layer_config or {}).get("source", {})
-	feature_dataset = source_cfg.get("feature_dataset")
-	dataset = source_cfg.get("dataset")
+    source_cfg = (layer_config or {}).get("source", {})
+    feature_dataset = source_cfg.get("feature_dataset")
+    dataset = source_cfg.get("dataset")
 
-	if not isinstance(dataset, str) or not dataset.strip():
-		raise ValueError("Missing or invalid 'source.dataset' in layer config")
+    if not isinstance(dataset, str) or not dataset.strip():
+        raise ValueError("Missing or invalid 'source.dataset' in layer config")
 
-	dataset = dataset.strip()
-	candidate_paths: list[str] = []
-	if isinstance(feature_dataset, str) and feature_dataset.strip():
-		candidate_paths.append(
-			os.path.join(sde_connection_path, feature_dataset.strip(), dataset)
-		)
-	candidate_paths.append(os.path.join(sde_connection_path, dataset))
+    dataset = dataset.strip()
+    candidate_paths: list[str] = []
+    if isinstance(feature_dataset, str) and feature_dataset.strip():
+        candidate_paths.append(
+            os.path.join(sde_connection_path, feature_dataset.strip(), dataset)
+        )
+    candidate_paths.append(os.path.join(sde_connection_path, dataset))
 
-	for candidate_path in candidate_paths:
-		if arcpy.Exists(candidate_path):
-			return candidate_path, candidate_paths
+    for candidate_path in candidate_paths:
+        if arcpy.Exists(candidate_path):
+            return candidate_path, candidate_paths
 
-	return candidate_paths[0], candidate_paths
+    return candidate_paths[0], candidate_paths
 
 
 def add_layer_from_sde(
-	map_obj: Any,
-	layer_name: str,
-	sde_connection_path: str,
-	layer_config: dict[str, Any],
+    map_obj: Any,
+    layer_name: str,
+    sde_connection_path: str,
+    layer_config: dict[str, Any],
 ) -> dict[str, Any]:
-	"""Add one layer to map from SDE source using layer config.
+    """Add one layer to map from SDE source using layer config.
 
-	:param map_obj: ArcGIS Pro map object.
-	:param layer_name: Target layer name from configuration.
-	:param sde_connection_path: Resolved SDE connection file path.
-	:param layer_config: Per-layer config dictionary.
-	:return: Result dictionary for logging/reporting.
-	"""
-	import arcpy
+    :param map_obj: ArcGIS Pro map object.
+    :param layer_name: Target layer name from configuration.
+    :param sde_connection_path: Resolved SDE connection file path.
+    :param layer_config: Per-layer config dictionary.
+    :return: Result dictionary for logging/reporting.
+    """
+    import arcpy  # type: ignore
 
-	result = _create_add_layer_from_sde_result(
-		layer_name=layer_name,
-		sde_connection_path=sde_connection_path,
-	)
+    result = _create_add_layer_from_sde_result(
+        layer_name=layer_name,
+        sde_connection_path=sde_connection_path,
+    )
 
-	try:
-		dataset_path, tried_paths = construct_sde_dataset_path(
-			sde_connection_path=sde_connection_path,
-			layer_config=layer_config,
-		)
-		result["dataset_path"] = dataset_path
-		result["tried_paths"] = tried_paths
+    try:
+        dataset_path, tried_paths = construct_sde_dataset_path(
+            sde_connection_path=sde_connection_path,
+            layer_config=layer_config,
+        )
+        result["dataset_path"] = dataset_path
+        result["tried_paths"] = tried_paths
 
-		if not arcpy.Exists(dataset_path):
-			result["error"] = "Source dataset was not found"
-			return result
+        if not arcpy.Exists(dataset_path):
+            result["error"] = "Source dataset was not found"
+            return result
 
-		added_obj = map_obj.addDataFromPath(dataset_path)
-		if hasattr(added_obj, "name"):
-			added_obj.name = layer_name
+        added_obj = map_obj.addDataFromPath(dataset_path)
+        if hasattr(added_obj, "name"):
+            added_obj.name = layer_name
 
-		result["added"] = True
-		return result
-	except Exception as exc:
-		result["error"] = str(exc)
-		return result
+        result["added"] = True
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
 
 
-def add_layers_from_config_sde_to_map(
-	map_obj: Any,
-	service_def_config: dict[str, Any],
-	infrastructure_config: dict[str, Any] | None = None,
-	env: str = "test",
-	access_mode: str = "read",
-	fallback_sde_path: str | None = None,
+def add_sde_layers_and_tables_to_map(
+    map_obj: Any,
+    layer_entries: list[tuple[str, dict[str, Any]]],
+    sde_connection_by_layer_name: dict[str, str],
+    default_sde_connection_path: str | None = None,
 ) -> dict[str, Any]:
-	"""Add all YAML-defined layers from SDE to the target map.
+    """Add pre-resolved layers/tables from SDE to the target map.
 
-	:param map_obj: ArcGIS Pro map object.
-	:param service_def_config: Full map service definition config dictionary.
-	:param infrastructure_config: Optional infrastructure config dictionary.
-	:param env: Environment key for resolving map-level SDE connection.
-	:param access_mode: Access mode for infrastructure SDE resolution.
-	:param fallback_sde_path: Optional fallback SDE path.
-	:return: Summary dictionary with per-layer results.
-	"""
-	layer_entries = iter_map_service_layer_entries(service_def_config)
-	results: list[dict[str, Any]] = []
-	existing_layer_names = _get_existing_map_layer_names(map_obj)
+    :param map_obj: ArcGIS Pro map object.
+    :param layer_entries: Ordered ``(layer_name, layer_config)`` entries.
+    :param sde_connection_by_layer_name: Mapping ``layer_name -> sde_connection_path``.
+    :param default_sde_connection_path: Optional fallback SDE path.
+    :return: Summary dictionary with per-layer results.
+    """
+    if not isinstance(layer_entries, list):
+        raise ValueError("layer_entries must be provided as a list")
+    if not isinstance(sde_connection_by_layer_name, dict):
+        raise ValueError("sde_connection_by_layer_name must be provided as a dict")
+    results: list[dict[str, Any]] = []
+    existing_layer_names = _get_existing_map_layer_names(map_obj)
 
-	LOGGER.info("Add layers from SDE in config order")
+    LOGGER.debug("Add layers/tables from SDE in provided order")
 
-	for layer_name, layer_config in layer_entries:
-		normalized_layer_name = layer_name.strip().casefold()
-		if normalized_layer_name in existing_layer_names:
-			layer_result = _create_add_layer_from_sde_result(
-				layer_name=layer_name,
-				sde_connection_path=None,
-			)
-			layer_result["skipped"] = True
-			LOGGER.debug("-> Skip adding layer '%s': layer already exists in map", layer_name)
-			results.append(layer_result)
-			continue
+    for layer_name, layer_config in layer_entries:
+        normalized_layer_name = layer_name.strip().casefold()
+        if normalized_layer_name in existing_layer_names:
+            layer_result = _create_add_layer_from_sde_result(
+                layer_name=layer_name,
+                sde_connection_path=None,
+            )
+            layer_result["skipped"] = True
+            LOGGER.debug(
+                "-> Skip adding layer '%s': layer already exists in map", layer_name
+            )
+            results.append(layer_result)
+            continue
 
-		LOGGER.debug("-> Add layer from SDE source: %s", layer_name)
-		try:
-			sde_connection_path = resolve_layer_sde_connection_path(
-				service_def_config=service_def_config,
-				layer_config=layer_config,
-				infrastructure_config=infrastructure_config,
-				env=env,
-				access_mode=access_mode,
-				fallback_path=fallback_sde_path,
-			)
-		except Exception as exc:
-			layer_result = _create_add_layer_from_sde_result(
-				layer_name=layer_name,
-				sde_connection_path=None,
-			)
-			layer_result["error"] = str(exc)
-			LOGGER.warning("-> Could not resolve sde_connection for '%s': %s", layer_name, exc)
-			results.append(layer_result)
-			continue
+        LOGGER.debug("-> Add layer from SDE source: %s", layer_name)
+        sde_connection_path = sde_connection_by_layer_name.get(layer_name)
+        if not isinstance(sde_connection_path, str) or not sde_connection_path.strip():
+            sde_connection_path = default_sde_connection_path
 
-		if not os.path.exists(sde_connection_path):
-			LOGGER.warning("-> SDE connection file was not found: %s", sde_connection_path)
+        if not isinstance(sde_connection_path, str) or not sde_connection_path.strip():
+            layer_result = _create_add_layer_from_sde_result(
+                layer_name=layer_name,
+                sde_connection_path=None,
+            )
+            layer_result["error"] = "No SDE connection available for layer"
+            LOGGER.warning(
+                "-> Could not resolve sde_connection for '%s': %s",
+                layer_name,
+                layer_result["error"],
+            )
+            results.append(layer_result)
+            continue
 
-		layer_result = add_layer_from_sde(
-			map_obj=map_obj,
-			layer_name=layer_name,
-			sde_connection_path=sde_connection_path,
-			layer_config=layer_config,
-		)
-		if layer_result.get("added"):
-			existing_layer_names.add(normalized_layer_name)
-			LOGGER.debug("-> Added layer '%s' from %s", layer_name, layer_result.get("dataset_path"))
-		elif layer_result.get("skipped"):
-			LOGGER.debug("-> Skipped layer '%s'", layer_name)
-		else:
-			LOGGER.warning("-> Failed adding layer '%s': %s", layer_name, layer_result.get("error"))
-		results.append(layer_result)
+        if not os.path.exists(sde_connection_path):
+            LOGGER.warning(
+                "-> SDE connection file was not found: %s", sde_connection_path
+            )
 
-	added_count = sum(1 for result in results if bool(result.get("added")))
-	skipped_count = sum(1 for result in results if bool(result.get("skipped")))
-	LOGGER.info(
-		"-> Added %d/%d layer(s) to map (skipped existing: %d)",
-		added_count,
-		len(layer_entries),
-		skipped_count,
-	)
+        layer_result = add_layer_from_sde(
+            map_obj=map_obj,
+            layer_name=layer_name,
+            sde_connection_path=sde_connection_path,
+            layer_config=layer_config,
+        )
+        if layer_result.get("added"):
+            existing_layer_names.add(normalized_layer_name)
+            LOGGER.debug(
+                "-> Added layer '%s' from %s",
+                layer_name,
+                layer_result.get("dataset_path"),
+            )
+        elif layer_result.get("skipped"):
+            LOGGER.debug("-> Skipped layer '%s'", layer_name)
+        else:
+            LOGGER.warning(
+                "-> Failed adding layer '%s': %s", layer_name, layer_result.get("error")
+            )
+        results.append(layer_result)
 
-	return {
-		"layer_results": results,
-		"layer_total": len(layer_entries),
-		"layers_added_count": added_count,
-		"layers_skipped_count": skipped_count,
-	}
+    added_count = sum(1 for result in results if bool(result.get("added")))
+    skipped_count = sum(1 for result in results if bool(result.get("skipped")))
+    LOGGER.debug(
+        "-> Added %d/%d layer/table entry(ies) to map (skipped existing: %d)",
+        added_count,
+        len(layer_entries),
+        skipped_count,
+    )
+
+    return {
+        "layer_results": results,
+        "layer_total": len(layer_entries),
+        "layers_added_count": added_count,
+        "layers_skipped_count": skipped_count,
+    }
+
+
+def add_group_layer_to_map(
+    map_obj: Any,
+    group_name: str,
+) -> dict[str, Any]:
+    """Add an empty group layer to the map.
+
+    :param map_obj: ArcGIS Pro map object.
+    :param group_name: Name for the new group layer.
+    :return: Result dictionary with ``added``, ``skipped``, ``group_layer``, and ``error`` keys.
+    """
+    result: dict[str, Any] = {
+        "group_name": group_name,
+        "added": False,
+        "skipped": False,
+        "group_layer": None,
+        "error": None,
+    }
+
+    # Reuse existing group layer when already present.
+    for existing_layer in map_obj.listLayers(group_name):
+        if getattr(existing_layer, "isGroupLayer", False):
+            result["skipped"] = True
+            result["group_layer"] = existing_layer
+            LOGGER.debug(
+                "-> Group layer '%s' already exists; reusing existing group", group_name
+            )
+            return result
+
+    if not hasattr(map_obj, "createGroupLayer"):
+        result["error"] = (
+            "map.createGroupLayer is not available; requires ArcGIS Pro 3.1 or later"
+        )
+        LOGGER.warning(
+            "-> Cannot add group layer '%s': %s", group_name, result["error"]
+        )
+        return result
+
+    try:
+        group_layer = map_obj.createGroupLayer(group_name)
+        result["added"] = True
+        result["group_layer"] = group_layer
+        LOGGER.debug("-> Added group layer '%s'", group_name)
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        LOGGER.warning("-> Failed to add group layer '%s': %s", group_name, exc)
+        return result
+
+
+def move_layers_into_group(
+    map_obj: Any,
+    group_layer_name: str,
+    child_layer_names: list[str],
+) -> dict[str, Any]:
+    """
+    Move named layers into an existing group layer in the given order.
+
+    Group layers are supported, except the target and its ancestors. Only the
+    selected source is removed after grouping; cleanup failures are reported.
+
+    :param map_obj: ArcGIS Pro map object.
+    :param group_layer_name: Name of the target group layer.
+    :param child_layer_names: Ordered list of layer names to move into the group.
+    :return: Summary dictionary with per-layer move results and ``moved_count``.
+    """
+    results: list[dict[str, Any]] = []
+
+    group_layer = next(
+        (
+            lyr
+            for lyr in map_obj.listLayers(group_layer_name)
+            if getattr(lyr, "isGroupLayer", False)
+        ),
+        None,
+    )
+    if group_layer is None:
+        LOGGER.warning(
+            "-> Group layer '%s' not found; cannot move children", group_layer_name
+        )
+        return {
+            "group_layer_name": group_layer_name,
+            "child_layer_names": child_layer_names,
+            "layer_results": results,
+            "moved_count": 0,
+            "error": "Group layer not found",
+        }
+
+    if not hasattr(map_obj, "addLayerToGroup"):
+        LOGGER.warning(
+            "-> Map object does not expose addLayerToGroup; cannot move children into group '%s'",
+            group_layer_name,
+        )
+        return {
+            "group_layer_name": group_layer_name,
+            "child_layer_names": child_layer_names,
+            "layer_results": results,
+            "moved_count": 0,
+            "error": "Map.addLayerToGroup is not available",
+        }
+
+    # Ensure it uses full group path Parent \ParentGroup\ChildGroup for nested groups
+    group_long_name_prefix = f"{group_layer.longName}\\"
+
+    def _is_under_target_group(layer_obj: Any) -> bool:
+        """Return True when a layer longName indicates it is nested in target group."""
+        long_name = getattr(layer_obj, "longName", None)
+        return isinstance(long_name, str) and long_name.startswith(
+            group_long_name_prefix
+        )
+
+    # Build move candidates from current map once, then iterate by requested names.
+    child_name_set = {
+        name for name in child_layer_names if isinstance(name, str) and name.strip()
+    }
+    layers_to_move_by_name: dict[str, Any] = {}
+    blocked_layer_names: set[str] = set()
+    for layer_obj in map_obj.listLayers():
+        layer_name = getattr(layer_obj, "name", None)
+        if not isinstance(layer_name, str):
+            continue
+        if layer_name not in child_name_set:
+            continue
+        layer_long_name = getattr(layer_obj, "longName", None)
+        if getattr(layer_obj, "isGroupLayer", False) and (
+            layer_long_name == group_layer.longName
+            or (
+                isinstance(layer_long_name, str)
+                and group_layer.longName.startswith(f"{layer_long_name}\\")
+            )
+        ):
+            blocked_layer_names.add(layer_name)
+            continue
+        if _is_under_target_group(layer_obj):
+            continue
+        if layer_name not in layers_to_move_by_name:
+            layers_to_move_by_name[layer_name] = layer_obj
+
+    for child_name in child_layer_names:
+        child_result: dict[str, Any] = {
+            "layer_name": child_name,
+            "moved": False,
+            "error": None,
+        }
+
+        already_grouped = next(
+            (
+                lyr
+                for lyr in map_obj.listLayers(child_name)
+                if getattr(lyr, "name", None) == child_name
+                and _is_under_target_group(lyr)
+            ),
+            None,
+        )
+        if already_grouped is not None:
+            child_result["moved"] = True
+            LOGGER.debug(
+                "-> Layer '%s' is already grouped under '%s'",
+                child_name,
+                group_layer_name,
+            )
+            results.append(child_result)
+            continue
+
+        child_layer = layers_to_move_by_name.get(child_name)
+        if child_layer is None:
+            child_result["error"] = (
+                "Cannot move the target group or its ancestor into itself"
+                if child_name in blocked_layer_names
+                else "Layer not found in map"
+            )
+            LOGGER.warning(
+                "-> Could not move '%s' into group '%s': %s",
+                child_name,
+                group_layer_name,
+                child_result["error"],
+            )
+            results.append(child_result)
+            continue
+
+        try:
+            source_uri = getattr(child_layer, "URI", None)
+            map_obj.addLayerToGroup(group_layer, child_layer, "BOTTOM")
+
+            grouped_instances = [
+                lyr
+                for lyr in map_obj.listLayers(child_name)
+                if getattr(lyr, "name", None) == child_name
+                and _is_under_target_group(lyr)
+            ]
+            if not grouped_instances:
+                raise RuntimeError(
+                    "Layer was not nested under group after addLayerToGroup"
+                )
+
+            # Remove only the selected source if ArcGIS kept it outside the group.
+            source_still_outside = any(
+                not _is_under_target_group(lyr)
+                and (
+                    lyr is child_layer
+                    or (
+                        source_uri is not None
+                        and getattr(lyr, "URI", None) == source_uri
+                    )
+                )
+                for lyr in map_obj.listLayers()
+            )
+            if source_still_outside:
+                map_obj.removeLayer(child_layer)
+
+            child_result["moved"] = True
+            LOGGER.debug("-> Moved '%s' into group '%s'", child_name, group_layer_name)
+        except Exception as exc:
+            child_result["error"] = str(exc)
+            LOGGER.warning(
+                "-> Failed to move '%s' into group '%s': %s",
+                child_name,
+                group_layer_name,
+                exc,
+            )
+        results.append(child_result)
+
+    moved_count = sum(1 for r in results if bool(r.get("moved")))
+    return {
+        "group_layer_name": group_layer_name,
+        "child_layer_names": child_layer_names,
+        "layer_results": results,
+        "moved_count": moved_count,
+        "error": None,
+    }
 
 
 def _iter_lyrx_file_paths(lyrx_dir: str, recurse_subfolders: bool) -> list[str]:
-	"""Return all .lyrx file paths under a directory.
+    """Return all .lyrx file paths under a directory.
 
-	:param lyrx_dir: Root LYRX directory.
-	:param recurse_subfolders: Whether to recurse into subfolders.
-	:return: Sorted list of absolute .lyrx file paths.
-	"""
-	if not isinstance(lyrx_dir, str) or not lyrx_dir.strip():
-		return []
+    :param lyrx_dir: Root LYRX directory.
+    :param recurse_subfolders: Whether to recurse into subfolders.
+    :return: Sorted list of absolute .lyrx file paths.
+    """
+    if not isinstance(lyrx_dir, str) or not lyrx_dir.strip():
+        return []
 
-	root_dir = os.path.abspath(lyrx_dir)
-	if not os.path.isdir(root_dir):
-		return []
+    root_dir = os.path.abspath(lyrx_dir)
+    if not os.path.isdir(root_dir):
+        return []
 
-	paths: list[str] = []
-	if recurse_subfolders:
-		for walk_root, _, file_names in os.walk(root_dir):
-			for file_name in file_names:
-				if isinstance(file_name, str) and file_name.lower().endswith(".lyrx"):
-					paths.append(os.path.join(walk_root, file_name))
-	else:
-		for file_name in os.listdir(root_dir):
-			candidate = os.path.join(root_dir, file_name)
-			if os.path.isfile(candidate) and file_name.lower().endswith(".lyrx"):
-				paths.append(candidate)
+    paths: list[str] = []
+    if recurse_subfolders:
+        for walk_root, _, file_names in os.walk(root_dir):
+            for file_name in file_names:
+                if isinstance(file_name, str) and file_name.lower().endswith(".lyrx"):
+                    paths.append(os.path.join(walk_root, file_name))
+    else:
+        for file_name in os.listdir(root_dir):
+            candidate = os.path.join(root_dir, file_name)
+            if os.path.isfile(candidate) and file_name.lower().endswith(".lyrx"):
+                paths.append(candidate)
 
-	return sorted(paths, key=lambda path: path.lower())
+    return sorted(paths, key=lambda path: path.lower())
 
 
 # Scan LYRX files once and reuse the list.
 def _build_lyrx_lookup_index(all_lyrx_files: list[str]) -> dict[str, list[str]]:
-	"""Build case-insensitive lookup index for LYRX filenames.
+    """Build case-insensitive lookup index for LYRX filenames.
 
-	:param all_lyrx_files: Absolute LYRX file paths.
-	:return: Mapping of lower-cased filename to sorted path list.
-	"""
-	index: dict[str, list[str]] = {}
-	for path in all_lyrx_files:
-		file_name = os.path.basename(path).lower()
-		index.setdefault(file_name, []).append(path)
+    :param all_lyrx_files: Absolute LYRX file paths.
+    :return: Mapping of lower-cased filename to sorted path list.
+    """
+    index: dict[str, list[str]] = {}
+    for path in all_lyrx_files:
+        file_name = os.path.basename(path).lower()
+        index.setdefault(file_name, []).append(path)
 
-	for file_name in index:
-		index[file_name] = sorted(index[file_name], key=lambda item: item.lower())
+    for file_name in index:
+        index[file_name] = sorted(index[file_name], key=lambda item: item.lower())
 
-	return index
+    return index
 
 
 # Find LYRX path from saved list to avoid extra scans.
 def _resolve_lyrx_path_from_index(
-	layer_name: str,
-	lyrx_dir: str,
-	allow_suffix_match: bool,
-	recurse_subfolders: bool,
-	lyrx_lookup_index: dict[str, list[str]],
+    layer_name: str,
+    lyrx_dir: str,
+    allow_suffix_match: bool,
+    recurse_subfolders: bool,
+    lyrx_lookup_index: dict[str, list[str]],
 ) -> dict[str, Any]:
-	"""Resolve LYRX path using prebuilt filename index.
+    """Resolve LYRX path using prebuilt filename index.
 
-	:param layer_name: Layer name in the map/YAML config.
-	:param lyrx_dir: Root LYRX directory.
-	:param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
-	:param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
-	:param lyrx_lookup_index: Mapping of lower-cased filename to path list.
-	:return: Resolution dictionary with selected path and match metadata.
-	"""
-	normalized_name = str(layer_name or "").strip().lower()
-	result = _create_lyrx_path_resolution_result(
-		layer_name=layer_name,
-		lyrx_dir=lyrx_dir,
-		allow_suffix_match=allow_suffix_match,
-		recurse_subfolders=recurse_subfolders,
-	)
+    :param layer_name: Layer name in the map/YAML config.
+    :param lyrx_dir: Root LYRX directory.
+    :param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
+    :param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
+    :param lyrx_lookup_index: Mapping of lower-cased filename to path list.
+    :return: Resolution dictionary with selected path and match metadata.
+    """
+    normalized_name = str(layer_name or "").strip().lower()
+    result = _create_lyrx_path_resolution_result(
+        layer_name=layer_name,
+        lyrx_dir=lyrx_dir,
+        allow_suffix_match=allow_suffix_match,
+        recurse_subfolders=recurse_subfolders,
+    )
 
-	if not normalized_name:
-		return result
+    if not normalized_name:
+        return result
 
-	exact_file_name = f"{normalized_name}.lyrx"
-	exact_matches = lyrx_lookup_index.get(exact_file_name, [])
-	if exact_matches:
-		selected = exact_matches[0]
-		if len(exact_matches) > 1:
-			LOGGER.warning(
-				"-> Multiple exact LYRX matches for '%s'. Using first alphabetically: %s",
-				layer_name,
-				selected,
-			)
-		result.update(
-			{
-				"lyrx_path": selected,
-				"match_type": "exact",
-				"candidate_count": len(exact_matches),
-				"candidate_paths": exact_matches,
-			}
-		)
-		return result
+    exact_file_name = f"{normalized_name}.lyrx"
+    exact_matches = lyrx_lookup_index.get(exact_file_name, [])
+    if exact_matches:
+        selected = exact_matches[0]
+        if len(exact_matches) > 1:
+            LOGGER.warning(
+                "-> Multiple exact LYRX matches for '%s'. Using first alphabetically: %s",
+                layer_name,
+                selected,
+            )
+        result.update(
+            {
+                "lyrx_path": selected,
+                "match_type": "exact",
+                "candidate_count": len(exact_matches),
+                "candidate_paths": exact_matches,
+            }
+        )
+        return result
 
-	if allow_suffix_match:
-		suffix_prefix = f"{normalized_name}_"
-		suffix_matches = sorted(
-			[
-				paths[0]
-				for file_name, paths in lyrx_lookup_index.items()
-				if file_name.startswith(suffix_prefix)
-			],
-			key=lambda item: item.lower(),
-		)
-		if suffix_matches:
-			selected = suffix_matches[0]
-			if len(suffix_matches) > 1:
-				LOGGER.warning(
-					"-> Multiple suffix LYRX matches for '%s'. Using first alphabetically: %s",
-					layer_name,
-					selected,
-				)
-			result.update(
-				{
-					"lyrx_path": selected,
-					"match_type": "suffix",
-					"candidate_count": len(suffix_matches),
-					"candidate_paths": suffix_matches,
-				}
-			)
-			return result
+    if allow_suffix_match:
+        suffix_prefix = f"{normalized_name}_"
+        suffix_matches = sorted(
+            [
+                paths[0]
+                for file_name, paths in lyrx_lookup_index.items()
+                if file_name.startswith(suffix_prefix)
+            ],
+            key=lambda item: item.lower(),
+        )
+        if suffix_matches:
+            selected = suffix_matches[0]
+            if len(suffix_matches) > 1:
+                LOGGER.warning(
+                    "-> Multiple suffix LYRX matches for '%s'. Using first alphabetically: %s",
+                    layer_name,
+                    selected,
+                )
+            result.update(
+                {
+                    "lyrx_path": selected,
+                    "match_type": "suffix",
+                    "candidate_count": len(suffix_matches),
+                    "candidate_paths": suffix_matches,
+                }
+            )
+            return result
 
-		# Prefix match: file ends with _{layer_name}.lyrx (e.g. vern_0_naturvern_omraade.lyrx)
-		prefix_suffix = f"_{normalized_name}.lyrx"
-		prefix_matches = sorted(
-			[
-				paths[0]
-				for file_name, paths in lyrx_lookup_index.items()
-				if file_name.endswith(prefix_suffix)
-			],
-			key=lambda item: item.lower(),
-		)
-		if prefix_matches:
-			selected = prefix_matches[0]
-			if len(prefix_matches) > 1:
-				LOGGER.warning(
-					"-> Multiple prefix LYRX matches for '%s'. Using first alphabetically: %s",
-					layer_name,
-					selected,
-				)
-			result.update(
-				{
-					"lyrx_path": selected,
-					"match_type": "prefix",
-					"candidate_count": len(prefix_matches),
-					"candidate_paths": prefix_matches,
-				}
-			)
+        # Prefix match: file ends with _{layer_name}.lyrx (e.g. vern_0_naturvern_omraade.lyrx)
+        prefix_suffix = f"_{normalized_name}.lyrx"
+        prefix_matches = sorted(
+            [
+                paths[0]
+                for file_name, paths in lyrx_lookup_index.items()
+                if file_name.endswith(prefix_suffix)
+            ],
+            key=lambda item: item.lower(),
+        )
+        if prefix_matches:
+            selected = prefix_matches[0]
+            if len(prefix_matches) > 1:
+                LOGGER.warning(
+                    "-> Multiple prefix LYRX matches for '%s'. Using first alphabetically: %s",
+                    layer_name,
+                    selected,
+                )
+            result.update(
+                {
+                    "lyrx_path": selected,
+                    "match_type": "prefix",
+                    "candidate_count": len(prefix_matches),
+                    "candidate_paths": prefix_matches,
+                }
+            )
 
-	return result
+    return result
 
 
 def resolve_lyrx_path(
-	layer_name: str,
-	lyrx_dir: str,
-	allow_suffix_match: bool = True,
-	recurse_subfolders: bool = True,
+    layer_name: str,
+    lyrx_dir: str,
+    allow_suffix_match: bool = True,
+    recurse_subfolders: bool = True,
 ) -> dict[str, Any]:
-	"""Resolve LYRX path for a layer using strict-first matching.
+    """Resolve LYRX path for a layer using strict-first matching.
 
-	Matching strategy:
-	- exact: ``<layer_name>.lyrx`` (case-insensitive)
-	- suffix: ``<layer_name>_*.lyrx`` (case-insensitive, optional)
+    Matching strategy:
+    - exact: ``<layer_name>.lyrx`` (case-insensitive)
+    - suffix: ``<layer_name>_*.lyrx`` (case-insensitive, optional)
 
-	When multiple candidates are found for the selected strategy, the first
-	alphabetically sorted path is selected and a warning is logged.
+    When multiple candidates are found for the selected strategy, the first
+    alphabetically sorted path is selected and a warning is logged.
 
-	:param layer_name: Layer name in the map/YAML config.
-	:param lyrx_dir: Root LYRX directory.
-	:param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
-	:param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
-	:return: Resolution dictionary with selected path and match metadata.
-	"""
-	all_lyrx_files = _iter_lyrx_file_paths(lyrx_dir, recurse_subfolders)
-	lyrx_lookup_index = _build_lyrx_lookup_index(all_lyrx_files)
-	return _resolve_lyrx_path_from_index(
-		layer_name=layer_name,
-		lyrx_dir=lyrx_dir,
-		allow_suffix_match=allow_suffix_match,
-		recurse_subfolders=recurse_subfolders,
-		lyrx_lookup_index=lyrx_lookup_index,
-	)
+    :param layer_name: Layer name in the map/YAML config.
+    :param lyrx_dir: Root LYRX directory.
+    :param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
+    :param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
+    :return: Resolution dictionary with selected path and match metadata.
+    """
+    all_lyrx_files = _iter_lyrx_file_paths(lyrx_dir, recurse_subfolders)
+    lyrx_lookup_index = _build_lyrx_lookup_index(all_lyrx_files)
+    return _resolve_lyrx_path_from_index(
+        layer_name=layer_name,
+        lyrx_dir=lyrx_dir,
+        allow_suffix_match=allow_suffix_match,
+        recurse_subfolders=recurse_subfolders,
+        lyrx_lookup_index=lyrx_lookup_index,
+    )
 
 
 def apply_lyrx_to_layer(
-	target_layer: Any,
-	layer_name: str,
-	lyrx_dir: str,
-	transfer_mode: str = "symbology",
-	allow_suffix_match: bool = True,
-	recurse_subfolders: bool = True,
-	lyrx_lookup_index: dict[str, list[str]] | None = None,
+    target_layer: Any,
+    layer_name: str,
+    lyrx_dir: str,
+    transfer_mode: str = "symbology",
+    allow_suffix_match: bool = True,
+    recurse_subfolders: bool = True,
+    lyrx_lookup_index: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-	"""Apply LYRX transfer to an existing map layer.
+    """Apply LYRX transfer to an existing map layer.
 
-	Transfer modes:
-	- ``symbology``: apply only symbology from LYRX
-	- ``all``: apply symbology, definition query, labels and popup settings
+    Transfer modes:
+    - ``symbology``: apply only symbology from LYRX
+    - ``all``: apply symbology, definition query, labels and popup settings
 
-	:param target_layer: Target ArcGIS layer object in map.
-	:param layer_name: Layer name used for LYRX lookup.
-	:param lyrx_dir: Root LYRX directory.
-	:param transfer_mode: Transfer mode (``symbology`` or ``all``).
-	:param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
-	:param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
-	:param lyrx_lookup_index: Optional prebuilt LYRX lookup index for batch runs.
-	:return: Result dictionary for logging/reporting.
-	"""
-	import arcpy
+    :param target_layer: Target ArcGIS layer object in map.
+    :param layer_name: Layer name used for LYRX lookup.
+    :param lyrx_dir: Root LYRX directory.
+    :param transfer_mode: Transfer mode (``symbology`` or ``all``).
+    :param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
+    :param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
+    :param lyrx_lookup_index: Optional prebuilt LYRX lookup index for batch runs.
+    :return: Result dictionary for logging/reporting.
+    """
+    import arcpy  # type: ignore
 
-	mode = str(transfer_mode or "").strip().lower()
-	if mode not in {"symbology", "all"}:
-		raise ValueError("transfer_mode must be 'symbology' or 'all'")
+    mode = str(transfer_mode or "").strip().lower()
+    if mode not in {"symbology", "all"}:
+        raise ValueError("transfer_mode must be 'symbology' or 'all'")
 
-	if isinstance(lyrx_lookup_index, dict):
-		resolve_result = _resolve_lyrx_path_from_index(
-			layer_name=layer_name,
-			lyrx_dir=lyrx_dir,
-			allow_suffix_match=allow_suffix_match,
-			recurse_subfolders=recurse_subfolders,
-			lyrx_lookup_index=lyrx_lookup_index,
-		)
-	else:
-		resolve_result = resolve_lyrx_path(
-			layer_name=layer_name,
-			lyrx_dir=lyrx_dir,
-			allow_suffix_match=allow_suffix_match,
-			recurse_subfolders=recurse_subfolders,
-		)
+    if isinstance(lyrx_lookup_index, dict):
+        resolve_result = _resolve_lyrx_path_from_index(
+            layer_name=layer_name,
+            lyrx_dir=lyrx_dir,
+            allow_suffix_match=allow_suffix_match,
+            recurse_subfolders=recurse_subfolders,
+            lyrx_lookup_index=lyrx_lookup_index,
+        )
+    else:
+        resolve_result = resolve_lyrx_path(
+            layer_name=layer_name,
+            lyrx_dir=lyrx_dir,
+            allow_suffix_match=allow_suffix_match,
+            recurse_subfolders=recurse_subfolders,
+        )
 
-	result = _create_apply_lyrx_to_layer_result(
-		layer_name=layer_name,
-		transfer_mode=mode,
-		resolve_result=resolve_result,
-	)
+    result = _create_apply_lyrx_to_layer_result(
+        layer_name=layer_name,
+        transfer_mode=mode,
+        resolve_result=resolve_result,
+    )
 
-	lyrx_path = resolve_result.get("lyrx_path")
-	if not isinstance(lyrx_path, str) or not lyrx_path:
-		result["error"] = "No matching LYRX file was found"
-		LOGGER.warning(
-			"-> LYRX not found for layer '%s' in '%s' (recursive=%s)",
-			layer_name,
-			lyrx_dir,
-			recurse_subfolders,
-		)
-		return result
+    lyrx_path = resolve_result.get("lyrx_path")
+    if not isinstance(lyrx_path, str) or not lyrx_path:
+        result["error"] = "No matching LYRX file was found"
+        LOGGER.warning(
+            "-> LYRX not found for layer '%s' in '%s' (recursive=%s)",
+            layer_name,
+            lyrx_dir,
+            recurse_subfolders,
+        )
+        return result
 
-	layer_file = None
-	try:
-		layer_file = arcpy.mp.LayerFile(lyrx_path)
-		source_layers = layer_file.listLayers()
-		if not source_layers:
-			result["error"] = "LYRX has no layers"
-			LOGGER.warning("-> LYRX has no layers for '%s': %s", layer_name, lyrx_path)
-			return result
+    layer_file = None
+    try:
+        layer_file = arcpy.mp.LayerFile(lyrx_path)
+        source_layers = layer_file.listLayers()
+        if not source_layers:
+            result["error"] = "LYRX has no layers"
+            LOGGER.warning("-> LYRX has no layers for '%s': %s", layer_name, lyrx_path)
+            return result
 
-		source_layer = next(
-			(layer for layer in source_layers if not layer.isGroupLayer),
-			source_layers[0],
-		)
-		arcpy.management.ApplySymbologyFromLayer(target_layer, source_layer)
+        source_layer = next(
+            (layer for layer in source_layers if not layer.isGroupLayer),
+            source_layers[0],
+        )
+        arcpy.management.ApplySymbologyFromLayer(target_layer, source_layer)
 
-		if mode == "all":
-			if hasattr(source_layer, "definitionQuery") and hasattr(
-				target_layer, "definitionQuery"
-			):
-				source_query = source_layer.definitionQuery
-				target_layer.definitionQuery = source_query if source_query is not None else ""
+        if mode == "all":
+            if hasattr(source_layer, "definitionQuery") and hasattr(
+                target_layer, "definitionQuery"
+            ):
+                source_query = source_layer.definitionQuery
+                target_layer.definitionQuery = (
+                    source_query if source_query is not None else ""
+                )
 
-			source_cim = source_layer.getDefinition("V3")
-			target_cim = target_layer.getDefinition("V3")
-			changed_cim = False
+            source_cim = source_layer.getDefinition("V3")
+            target_cim = target_layer.getDefinition("V3")
+            changed_cim = False
 
-			if hasattr(source_layer, "showLabels") and hasattr(target_layer, "showLabels"):
-				target_layer.showLabels = source_layer.showLabels
+            if hasattr(source_layer, "showLabels") and hasattr(
+                target_layer, "showLabels"
+            ):
+                target_layer.showLabels = source_layer.showLabels
 
-			if hasattr(source_cim, "labelClasses") and hasattr(target_cim, "labelClasses"):
-				setattr(target_cim, "labelClasses", getattr(source_cim, "labelClasses"))
-				changed_cim = True
+            if hasattr(source_cim, "labelClasses") and hasattr(
+                target_cim, "labelClasses"
+            ):
+                target_cim.labelClasses = source_cim.labelClasses
+                changed_cim = True
 
-			if hasattr(source_cim, "popupInfo") and hasattr(target_cim, "popupInfo"):
-				setattr(target_cim, "popupInfo", getattr(source_cim, "popupInfo"))
-				changed_cim = True
+            if hasattr(source_cim, "popupInfo") and hasattr(target_cim, "popupInfo"):
+                target_cim.popupInfo = source_cim.popupInfo
+                changed_cim = True
 
-			source_ft = getattr(source_cim, "featureTable", None)
-			target_ft = getattr(target_cim, "featureTable", None)
-			if source_ft is not None and target_ft is not None:
-				if hasattr(source_ft, "htmlPopupInfo") and hasattr(
-					target_ft, "htmlPopupInfo"
-				):
-					setattr(target_ft, "htmlPopupInfo", getattr(source_ft, "htmlPopupInfo"))
-					changed_cim = True
+            source_ft = getattr(source_cim, "featureTable", None)
+            target_ft = getattr(target_cim, "featureTable", None)
+            if source_ft is not None and target_ft is not None:
+                if hasattr(source_ft, "htmlPopupInfo") and hasattr(
+                    target_ft, "htmlPopupInfo"
+                ):
+                    target_ft.htmlPopupInfo = source_ft.htmlPopupInfo
+                    changed_cim = True
 
-			if changed_cim:
-				target_layer.setDefinition(target_cim)
+            if changed_cim:
+                target_layer.setDefinition(target_cim)
 
-		result["applied"] = True
-		return result
-	except Exception as exc:
-		result["error"] = str(exc)
-		return result
-	finally:
-		if layer_file is not None:
-			del layer_file
+        result["applied"] = True
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
+    finally:
+        if layer_file is not None:
+            del layer_file
 
 
-def apply_lyrx_to_map_layers_from_config(
-	map_obj: Any,
-	service_def_config: dict[str, Any],
-	lyrx_dir: str,
-	transfer_mode: str = "symbology",
-	allow_suffix_match: bool = True,
-	recurse_subfolders: bool = True,
+def apply_lyrx_to_map_layers(
+    map_obj: Any,
+    layer_names: list[str],
+    lyrx_dir: str,
+    transfer_mode: str = "symbology",
+    allow_suffix_match: bool = True,
+    recurse_subfolders: bool = True,
 ) -> dict[str, Any]:
-	"""Apply LYRX transfer for all YAML-defined layers in a map.
+    """Apply LYRX transfer for an explicit list of map layers.
 
-	:param map_obj: ArcGIS Pro map object.
-	:param service_def_config: Full map service definition config dictionary.
-	:param lyrx_dir: Root LYRX directory.
-	:param transfer_mode: Transfer mode (``symbology`` or ``all``).
-	:param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
-	:param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
-	:return: Summary dictionary with per-layer transfer results.
-	"""
-	layer_entries = iter_map_service_layer_entries(service_def_config)
-	results: list[dict[str, Any]] = []
+    :param map_obj: ArcGIS Pro map object.
+    :param layer_names: Ordered list of target map layer names.
+    :param lyrx_dir: Root LYRX directory.
+    :param transfer_mode: Transfer mode (``symbology`` or ``all``).
+    :param allow_suffix_match: Whether to allow ``<layer_name>_*.lyrx`` fallback.
+    :param recurse_subfolders: Whether LYRX lookup recurses into subfolders.
+    :return: Summary dictionary with per-layer transfer results.
+    """
+    if not isinstance(layer_names, list):
+        raise ValueError("layer_names must be provided as a list")
+    target_layer_names = [
+        name.strip() for name in layer_names if isinstance(name, str) and name.strip()
+    ]
+    results: list[dict[str, Any]] = []
 
-	LOGGER.info(
-		"Apply LYRX transfer to map layers (mode=%s, allow_suffix_match=%s, recurse_subfolders=%s)",
-		transfer_mode,
-		allow_suffix_match,
-		recurse_subfolders,
-	)
-	all_lyrx_files = _iter_lyrx_file_paths(lyrx_dir, recurse_subfolders)
-	lyrx_lookup_index = _build_lyrx_lookup_index(all_lyrx_files)
+    LOGGER.debug(
+        "Apply LYRX transfer to map layers (mode=%s, allow_suffix_match=%s, recurse_subfolders=%s)",
+        transfer_mode,
+        allow_suffix_match,
+        recurse_subfolders,
+    )
+    all_lyrx_files = _iter_lyrx_file_paths(lyrx_dir, recurse_subfolders)
+    lyrx_lookup_index = _build_lyrx_lookup_index(all_lyrx_files)
 
-	for layer_name, layer_config in layer_entries:
-		if isinstance(layer_config, dict) and layer_config.get("type") == "table":
-			LOGGER.debug("-> Skip LYRX transfer for table '%s'", layer_name)
-			continue
+    for layer_name in target_layer_names:
+        target_layers = map_obj.listLayers(layer_name)
+        if not target_layers:
+            result = _create_apply_lyrx_to_layer_result(
+                layer_name=layer_name,
+                transfer_mode=transfer_mode,
+                resolve_result=_create_lyrx_path_resolution_result(
+                    layer_name=layer_name,
+                    lyrx_dir=lyrx_dir,
+                    allow_suffix_match=allow_suffix_match,
+                    recurse_subfolders=recurse_subfolders,
+                ),
+            )
+            result["error"] = "Target map layer was not found"
+            LOGGER.warning(
+                "-> Could not find target map layer for LYRX transfer: %s", layer_name
+            )
+            results.append(result)
+            continue
 
-		target_layers = map_obj.listLayers(layer_name)
-		if not target_layers:
-			result = _create_apply_lyrx_to_layer_result(
-				layer_name=layer_name,
-				transfer_mode=transfer_mode,
-				resolve_result=_create_lyrx_path_resolution_result(
-					layer_name=layer_name,
-					lyrx_dir=lyrx_dir,
-					allow_suffix_match=allow_suffix_match,
-					recurse_subfolders=recurse_subfolders,
-				),
-			)
-			result["error"] = "Target map layer was not found"
-			LOGGER.warning("-> Could not find target map layer for LYRX transfer: %s", layer_name)
-			results.append(result)
-			continue
+        if len(target_layers) > 1:
+            LOGGER.warning(
+                "-> Multiple target map layers found for '%s'. Using first match.",
+                layer_name,
+            )
 
-		if len(target_layers) > 1:
-			LOGGER.warning(
-				"-> Multiple target map layers found for '%s'. Using first match.",
-				layer_name,
-			)
+        layer_result = apply_lyrx_to_layer(
+            target_layer=target_layers[0],
+            layer_name=layer_name,
+            lyrx_dir=lyrx_dir,
+            transfer_mode=transfer_mode,
+            allow_suffix_match=allow_suffix_match,
+            recurse_subfolders=recurse_subfolders,
+            lyrx_lookup_index=lyrx_lookup_index,
+        )
+        if layer_result.get("applied"):
+            LOGGER.debug(
+                "-> Applied LYRX (%s match) for '%s': %s",
+                layer_result.get("match_type"),
+                layer_name,
+                layer_result.get("lyrx_path"),
+            )
+        else:
+            LOGGER.warning(
+                "-> Failed LYRX transfer for '%s': %s",
+                layer_name,
+                layer_result.get("error"),
+            )
+        results.append(layer_result)
 
-		layer_result = apply_lyrx_to_layer(
-			target_layer=target_layers[0],
-			layer_name=layer_name,
-			lyrx_dir=lyrx_dir,
-			transfer_mode=transfer_mode,
-			allow_suffix_match=allow_suffix_match,
-			recurse_subfolders=recurse_subfolders,
-			lyrx_lookup_index=lyrx_lookup_index,
-		)
-		if layer_result.get("applied"):
-			LOGGER.debug(
-				"-> Applied LYRX (%s match) for '%s': %s",
-				layer_result.get("match_type"),
-				layer_name,
-				layer_result.get("lyrx_path"),
-			)
-		else:
-			LOGGER.warning(
-				"-> Failed LYRX transfer for '%s': %s",
-				layer_name,
-				layer_result.get("error"),
-			)
-		results.append(layer_result)
-
-	applied_count = sum(1 for item in results if bool(item.get("applied")))
-	return {
-		"layer_results": results,
-		"layer_total": len(layer_entries),
-		"layers_applied_count": applied_count,
-		"transfer_mode": transfer_mode,
-		"lyrx_dir": lyrx_dir,
-		"allow_suffix_match": allow_suffix_match,
-		"recurse_subfolders": recurse_subfolders,
-	}
+    applied_count = sum(1 for item in results if bool(item.get("applied")))
+    return {
+        "layer_results": results,
+        "layer_total": len(target_layer_names),
+        "layers_applied_count": applied_count,
+        "transfer_mode": transfer_mode,
+        "lyrx_dir": lyrx_dir,
+        "allow_suffix_match": allow_suffix_match,
+        "recurse_subfolders": recurse_subfolders,
+    }
 
 
 def export_map_layers_to_lyrx(
-	map_obj: Any,
-	lyrx_dir: str,
-	layer_names: list[str] | None = None,
-	file_prefix: str | None = None,
-	file_suffix: str | None = None,
-	layer_ids: dict[str, Any] | None = None,
-	overwrite: bool = True,
+    map_obj: Any,
+    lyrx_dir: str,
+    layer_names: list[str] | None = None,
+    file_prefix: str | None = None,
+    file_suffix: str | None = None,
+    layer_ids: dict[str, Any] | None = None,
+    overwrite: bool = True,
 ) -> dict[str, Any]:
-	"""Export full map-layer definitions to LYRX files.
+    """Export full map-layer definitions to LYRX files.
 
-	When ``layer_names`` is provided, export only those names in given order.
-	When omitted, export all non-group, non-basemap layers in the map.
+    When ``layer_names`` is provided, export only those names in given order.
+    When omitted, export all non-group, non-basemap layers in the map.
 
-	Filename pattern:
-	- When ``file_prefix`` and ``layer_ids`` are both set:
-	  ``<file_prefix>_<service_id>_<normalized_layer_name>.lyrx``.
-	- When only ``file_prefix`` is set: ``<file_prefix>_<normalized_layer_name>.lyrx``.
-	- Otherwise: ``<layer_name>_<file_suffix>.lyrx``.
+    Filename pattern:
+    - When ``file_prefix`` and ``layer_ids`` are both set:
+      ``<file_prefix>_<service_id>_<normalized_layer_name>.lyrx``.
+    - When only ``file_prefix`` is set: ``<file_prefix>_<normalized_layer_name>.lyrx``.
+    - Otherwise: ``<layer_name>_<file_suffix>.lyrx``.
 
-	:param map_obj: ArcGIS Pro map object.
-	:param lyrx_dir: Target LYRX directory.
-	:param layer_names: Optional ordered list of target layer names.
-	:param file_prefix: Optional filename prefix (e.g. data product name).
-		When set, ``file_suffix`` is ignored.
-	:param file_suffix: Optional LYRX filename suffix appended as ``<name>_<suffix>.lyrx``.
-		Ignored when ``file_prefix`` is set.
-	:param layer_ids: Optional mapping of layer name to service ID integer.
-		Only used when ``file_prefix`` is set. Layers missing from this dict
-		are exported without the id segment.
-	:param overwrite: Whether to overwrite existing LYRX files.
-	:return: Summary dictionary with per-layer export results.
-	"""
-	if not isinstance(lyrx_dir, str) or not lyrx_dir.strip():
-		raise ValueError("LYRX directory must be a non-empty string")
+    :param map_obj: ArcGIS Pro map object.
+    :param lyrx_dir: Target LYRX directory.
+    :param layer_names: Optional ordered list of target layer names.
+    :param file_prefix: Optional filename prefix (e.g. data product name).
+            When set, ``file_suffix`` is ignored.
+    :param file_suffix: Optional LYRX filename suffix appended as ``<name>_<suffix>.lyrx``.
+            Ignored when ``file_prefix`` is set.
+    :param layer_ids: Optional mapping of layer name to service ID integer.
+            Only used when ``file_prefix`` is set. Layers missing from this dict
+            are exported without the id segment.
+    :param overwrite: Whether to overwrite existing LYRX files.
+    :return: Summary dictionary with per-layer export results.
+    """
+    if not isinstance(lyrx_dir, str) or not lyrx_dir.strip():
+        raise ValueError("LYRX directory must be a non-empty string")
 
-	resolved_lyrx_dir = os.path.abspath(lyrx_dir)
-	os.makedirs(resolved_lyrx_dir, exist_ok=True)
+    resolved_lyrx_dir = os.path.abspath(lyrx_dir)
+    os.makedirs(resolved_lyrx_dir, exist_ok=True)
 
-	suffix = str(file_suffix or "").strip()
-	prefix = str(file_prefix or "").strip() or None
-	results: list[dict[str, Any]] = []
+    suffix = str(file_suffix or "").strip()
+    prefix = str(file_prefix or "").strip() or None
+    results: list[dict[str, Any]] = []
 
-	def _is_exportable_layer(layer_obj: Any) -> bool:
-		return not bool(getattr(layer_obj, "isGroupLayer", False)) and not bool(
-			getattr(layer_obj, "isBasemapLayer", False)
-		)
+    def _is_exportable_layer(layer_obj: Any) -> bool:
+        return not bool(getattr(layer_obj, "isGroupLayer", False)) and not bool(
+            getattr(layer_obj, "isBasemapLayer", False)
+        )
 
-	def _iter_leaf_layers(layer_collection: list[Any]) -> list[Any]:
-		collected: list[Any] = []
-		for layer_obj in layer_collection:
-			if bool(getattr(layer_obj, "isGroupLayer", False)):
-				try:
-					collected.extend(_iter_leaf_layers(layer_obj.listLayers()))
-				except Exception:
-					continue
-				continue
-			collected.append(layer_obj)
-		return collected
+    def _iter_leaf_layers(layer_collection: list[Any]) -> list[Any]:
+        collected: list[Any] = []
+        for layer_obj in layer_collection:
+            if bool(getattr(layer_obj, "isGroupLayer", False)):
+                try:
+                    collected.extend(_iter_leaf_layers(layer_obj.listLayers()))
+                except Exception:
+                    continue
+                continue
+            collected.append(layer_obj)
+        return collected
 
-	def _append_result(
-		layer_name: str,
-		lyrx_path: str | None,
-		exported: bool,
-		skipped: bool,
-		error: str | None,
-		reason: str,
-	) -> None:
-		results.append(
-			{
-				"layer_name": layer_name,
-				"lyrx_path": lyrx_path,
-				"exported": exported,
-				"skipped": skipped,
-				"error": error,
-				"reason": reason,
-			}
-		)
+    def _append_result(
+        layer_name: str,
+        lyrx_path: str | None,
+        exported: bool,
+        skipped: bool,
+        error: str | None,
+        reason: str,
+    ) -> None:
+        results.append(
+            {
+                "layer_name": layer_name,
+                "lyrx_path": lyrx_path,
+                "exported": exported,
+                "skipped": skipped,
+                "error": error,
+                "reason": reason,
+            }
+        )
 
-	def _export_one(layer_name: str, target_layer: Any) -> None:
-		if not _is_exportable_layer(target_layer):
-			_append_result(layer_name, None, False, True, None, "non_exportable_layer")
-			return
+    def _export_one(layer_name: str, target_layer: Any) -> None:
+        if not _is_exportable_layer(target_layer):
+            _append_result(layer_name, None, False, True, None, "non_exportable_layer")
+            return
 
-		if prefix:
-			layer_stem = re.sub(r"[^0-9a-z_]+", "_", layer_name.lower()).strip("_") or "layer"
-			if layer_ids is not None and layer_name in layer_ids:
-				layer_id = layer_ids[layer_name]
-				lyrx_filename = f"{prefix}_{layer_id}_{layer_stem}.lyrx"
-			else:
-				lyrx_filename = f"{prefix}_{layer_stem}.lyrx"
-		else:
-			file_stem = layer_name.replace("/", "_").replace("\\", "_")
-			lyrx_filename = f"{file_stem}_{suffix}.lyrx" if suffix else f"{file_stem}.lyrx"
-		lyrx_path = os.path.join(resolved_lyrx_dir, lyrx_filename)
-		try:
-			if overwrite and os.path.exists(lyrx_path):
-				os.remove(lyrx_path)
-			target_layer.saveACopy(lyrx_path)
-			_append_result(layer_name, lyrx_path, True, False, None, "exported")
-		except Exception as exc:
-			_append_result(layer_name, lyrx_path, False, False, str(exc), "export_failed")
+        if prefix:
+            layer_stem = (
+                re.sub(r"[^0-9a-z_]+", "_", layer_name.lower()).strip("_") or "layer"
+            )
+            if layer_ids is not None and layer_name in layer_ids:
+                layer_id = layer_ids[layer_name]
+                lyrx_filename = f"{prefix}_{layer_id}_{layer_stem}.lyrx"
+            else:
+                lyrx_filename = f"{prefix}_{layer_stem}.lyrx"
+        else:
+            file_stem = layer_name.replace("/", "_").replace("\\", "_")
+            lyrx_filename = (
+                f"{file_stem}_{suffix}.lyrx" if suffix else f"{file_stem}.lyrx"
+            )
+        lyrx_path = os.path.join(resolved_lyrx_dir, lyrx_filename)
+        try:
+            if overwrite and os.path.exists(lyrx_path):
+                os.remove(lyrx_path)
+            target_layer.saveACopy(lyrx_path)
+            _append_result(layer_name, lyrx_path, True, False, None, "exported")
+        except Exception as exc:
+            _append_result(
+                layer_name, lyrx_path, False, False, str(exc), "export_failed"
+            )
 
-	LOGGER.info(
-		"Export map layers to LYRX (lyrx_dir=%s, suffix=%s, overwrite=%s)",
-		resolved_lyrx_dir,
-		suffix,
-		overwrite,
-	)
+    LOGGER.debug(
+        "Export map layers to LYRX (lyrx_dir=%s, suffix=%s, overwrite=%s)",
+        resolved_lyrx_dir,
+        suffix,
+        overwrite,
+    )
 
-	if isinstance(layer_names, list):
-		target_name_sequence = [
-			str(name).strip() for name in layer_names if isinstance(name, str) and name.strip()
-		]
-		for layer_name in target_name_sequence:
-			target_layers = map_obj.listLayers(layer_name)
-			if not target_layers:
-				_append_result(
-					layer_name,
-					None,
-					False,
-					False,
-					"Target map layer was not found",
-					"missing_layer",
-				)
-				continue
-			if len(target_layers) > 1:
-				LOGGER.warning(
-					"-> Multiple target map layers found for '%s'. Using first match.",
-					layer_name,
-				)
-			_export_one(layer_name, target_layers[0])
-	else:
-		for target_layer in _iter_leaf_layers(map_obj.listLayers()):
-			layer_name = str(getattr(target_layer, "name", "") or "").strip()
-			if not layer_name:
-				continue
-			_export_one(layer_name, target_layer)
+    if isinstance(layer_names, list):
+        target_name_sequence = [
+            str(name).strip()
+            for name in layer_names
+            if isinstance(name, str) and name.strip()
+        ]
+        for layer_name in target_name_sequence:
+            target_layers = map_obj.listLayers(layer_name)
+            if not target_layers:
+                _append_result(
+                    layer_name,
+                    None,
+                    False,
+                    False,
+                    "Target map layer was not found",
+                    "missing_layer",
+                )
+                continue
+            if len(target_layers) > 1:
+                LOGGER.warning(
+                    "-> Multiple target map layers found for '%s'. Using first match.",
+                    layer_name,
+                )
+            _export_one(layer_name, target_layers[0])
+    else:
+        for target_layer in _iter_leaf_layers(map_obj.listLayers()):
+            layer_name = str(getattr(target_layer, "name", "") or "").strip()
+            if not layer_name:
+                continue
+            _export_one(layer_name, target_layer)
 
-	exported_count = sum(1 for item in results if bool(item.get("exported")))
-	skipped_count = sum(1 for item in results if bool(item.get("skipped")))
-	error_count = sum(1 for item in results if bool(item.get("error")))
+    exported_count = sum(1 for item in results if bool(item.get("exported")))
+    skipped_count = sum(1 for item in results if bool(item.get("skipped")))
+    error_count = sum(1 for item in results if bool(item.get("error")))
 
-	return {
-		"layer_results": results,
-		"layer_total": len(results),
-		"layers_exported_count": exported_count,
-		"layers_skipped_count": skipped_count,
-		"layers_error_count": error_count,
-		"lyrx_dir": resolved_lyrx_dir,
-		"file_suffix": suffix,
-		"overwrite": overwrite,
-	}
-
-
-def export_map_layers_to_lyrx_from_config(
-	map_obj: Any,
-	service_def_config: dict[str, Any],
-	lyrx_dir: str,
-	file_prefix: str | None = None,
-	file_suffix: str | None = None,
-	overwrite: bool = True,
-) -> dict[str, Any]:
-	"""Export full map-layer definitions to LYRX files from YAML layer order.
-
-	Only feature layers are exported. Table entries (``type: table``) are skipped.
-
-	Filename pattern:
-	- When ``file_prefix`` is set: ``<file_prefix>_<service_id>_<normalized_layer_name>.lyrx``.
-	- Otherwise: ``<layer_name>_<file_suffix>.lyrx``.
-
-	:param map_obj: ArcGIS Pro map object.
-	:param service_def_config: Full map service definition config dictionary.
-	:param lyrx_dir: Target LYRX directory.
-	:param file_prefix: Optional filename prefix (e.g. data product name).
-		When set, ``file_suffix`` is ignored and ``service_id`` from config is
-		included in the filename.
-	:param file_suffix: Optional LYRX filename suffix. Ignored when ``file_prefix`` is set.
-	:param overwrite: Whether to overwrite existing LYRX files.
-	:return: Summary dictionary with per-layer export results.
-	"""
-	layer_entries = iter_map_service_layer_entries(service_def_config)
-	layer_names = []
-	layer_ids: dict[str, Any] = {}
-	for layer_name, layer_config in layer_entries:
-		if isinstance(layer_config, dict) and layer_config.get("type") == "table":
-			continue
-		layer_names.append(layer_name)
-		if isinstance(layer_config, dict) and layer_config.get("service_id") is not None:
-			layer_ids[layer_name] = layer_config["service_id"]
-
-	summary = export_map_layers_to_lyrx(
-		map_obj=map_obj,
-		lyrx_dir=lyrx_dir,
-		layer_names=layer_names,
-		file_prefix=file_prefix,
-		file_suffix=file_suffix,
-		layer_ids=layer_ids if layer_ids else None,
-		overwrite=overwrite,
-	)
-	summary["layer_total"] = len(layer_entries)
-	summary["layers_skipped_count"] = int(summary.get("layers_skipped_count", 0)) + (
-		len(layer_entries) - len(layer_names)
-	)
-	return summary
+    return {
+        "layer_results": results,
+        "layer_total": len(results),
+        "layers_exported_count": exported_count,
+        "layers_skipped_count": skipped_count,
+        "layers_error_count": error_count,
+        "lyrx_dir": resolved_lyrx_dir,
+        "file_suffix": suffix,
+        "overwrite": overwrite,
+    }
 
 
 def _get_layer_fields_and_descriptions(layer: Any) -> tuple[Any, Any, Any]:
-	"""Return layer fields, cim and field descriptions.
+    """Return layer fields, CIM definition, and feature-table field descriptions.
 
-	:param layer: ArcGIS layer object.
-	:return: Tuple ``(fields, cim, field_descriptions)``.
-	"""
-	import arcpy
+    Field sources are probed in priority/fallback order (dataSource, Describe,
+    layer object), and the richest field set is selected to reduce risk of using
+    trimmed views.
 
-	if getattr(layer, "isGroupLayer", False) or getattr(layer, "isBasemapLayer", False):
-		return None, None, None
+    :param layer: ArcGIS layer object.
+    :return: Tuple ``(fields, cim, field_descriptions)`` or ``(None, None, None)``
+            when fields/CIM cannot be resolved.
+    """
+    import arcpy  # type: ignore
 
-	try:
-		fields = arcpy.ListFields(layer.dataSource)
-	except Exception:
-		try:
-			fields = arcpy.ListFields(layer)
-		except Exception:
-			return None, None, None
+    if getattr(layer, "isGroupLayer", False) or getattr(layer, "isBasemapLayer", False):
+        return None, None, None
 
-	try:
-		cim = layer.getDefinition("V3")
-	except Exception:
-		return None, None, None
+    candidates: list[list[Any]] = []
 
-	feature_table = getattr(cim, "featureTable", None)
-	field_descriptions = (
-		getattr(feature_table, "fieldDescriptions", None)
-		if feature_table is not None
-		else None
-	)
-	return fields, cim, field_descriptions
+    # Preferred: datasource path on layer.
+    try:
+        data_source = getattr(layer, "dataSource", None)
+        if isinstance(data_source, str) and data_source.strip():
+            fields_from_datasource = arcpy.ListFields(data_source)
+            if fields_from_datasource:
+                candidates.append(list(fields_from_datasource))
+    except Exception:
+        pass
+
+    # Fallback: describe metadata (often exposes full source fields).
+    try:
+        desc = arcpy.Describe(layer)
+        desc_fields = getattr(desc, "fields", None)
+        if desc_fields:
+            candidates.append(list(desc_fields))
+
+        catalog_path = getattr(desc, "catalogPath", None)
+        if isinstance(catalog_path, str) and catalog_path.strip():
+            fields_from_catalog = arcpy.ListFields(catalog_path)
+            if fields_from_catalog:
+                candidates.append(list(fields_from_catalog))
+    except Exception:
+        pass
+
+    # Last resort: layer-scoped fields (can reflect trimmed/view state).
+    try:
+        fields_from_layer = arcpy.ListFields(layer)
+        if fields_from_layer:
+            candidates.append(list(fields_from_layer))
+    except Exception:
+        pass
+
+    if not candidates:
+        return None, None, None
+
+    # Prefer the richest candidate set to avoid propagating trimmed field sets.
+    fields = max(candidates, key=len)
+
+    try:
+        cim = layer.getDefinition("V3")
+    except Exception:
+        return None, None, None
+
+    feature_table = getattr(cim, "featureTable", None)
+    field_descriptions = (
+        getattr(feature_table, "fieldDescriptions", None)
+        if feature_table is not None
+        else None
+    )
+    return fields, cim, field_descriptions
 
 
 def _get_layer_field_name_lookup(layer: Any) -> tuple[dict[str, str], str | None]:
-	"""Build normalized field-name lookup for one layer.
+    """Build normalized field-name lookup for one layer.
 
-	:param layer: ArcGIS layer object.
-	:return: Tuple ``(lookup, error_message)``.
-	"""
-	import arcpy
+    :param layer: ArcGIS layer object.
+    :return: Tuple ``(lookup, error_message)``.
+    """
+    import arcpy  # type: ignore
 
-	try:
-		fields = arcpy.ListFields(layer.dataSource)
-	except Exception as exc:
-		try:
-			fields = arcpy.ListFields(layer)
-		except Exception as exc_source:
-			return {}, f"Could not list fields: {exc}; {exc_source}"
+    candidates: list[list[Any]] = []
+    errors: list[str] = []
 
-	lookup: dict[str, str] = {}
-	for field in fields:
-		actual_name = getattr(field, "name", None)
-		if not isinstance(actual_name, str):
-			continue
-		normalized = normalize_field_name(actual_name)
-		if normalized and normalized not in lookup:
-			lookup[normalized] = actual_name
+    try:
+        data_source = getattr(layer, "dataSource", None)
+        if isinstance(data_source, str) and data_source.strip():
+            fields_from_datasource = arcpy.ListFields(data_source)
+            if fields_from_datasource:
+                candidates.append(list(fields_from_datasource))
+    except Exception as exc:
+        errors.append(f"dataSource: {exc}")
 
-	return lookup, None
+    try:
+        desc = arcpy.Describe(layer)
+        desc_fields = getattr(desc, "fields", None)
+        if desc_fields:
+            candidates.append(list(desc_fields))
 
+        catalog_path = getattr(desc, "catalogPath", None)
+        if isinstance(catalog_path, str) and catalog_path.strip():
+            fields_from_catalog = arcpy.ListFields(catalog_path)
+            if fields_from_catalog:
+                candidates.append(list(fields_from_catalog))
+    except Exception as exc:
+        errors.append(f"describe: {exc}")
 
-def resolve_configured_cols(layer: Any, configured_cols: Any) -> tuple[list[str], str]:
-	"""Resolve configured cols to an explicit field-name list.
+    try:
+        fields_from_layer = arcpy.ListFields(layer)
+        if fields_from_layer:
+            candidates.append(list(fields_from_layer))
+    except Exception as exc:
+        errors.append(f"layer: {exc}")
 
-	Supports the special keyword ``all`` (or ``*``) to include all source
-	fields on the layer.
+    if not candidates:
+        return {}, "Could not list fields: " + "; ".join(errors)
 
-	:param layer: ArcGIS layer object.
-	:param configured_cols: Raw ``cols`` value from config.
-	:return: Tuple ``(resolved_cols, cols_mode)``.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
+    fields = max(candidates, key=len)
 
-	if isinstance(configured_cols, list):
-		resolved = [field_name for field_name in configured_cols if isinstance(field_name, str) and field_name.strip()]
-		return resolved, "list"
+    lookup: dict[str, str] = {}
+    for field in fields:
+        actual_name = getattr(field, "name", None)
+        if not isinstance(actual_name, str):
+            continue
+        normalized = normalize_field_name(actual_name)
+        if normalized and normalized not in lookup:
+            lookup[normalized] = actual_name
 
-	if isinstance(configured_cols, str):
-		normalized_token = configured_cols.strip().lower()
-		if normalized_token in {"all", "*"}:
-			lookup, error_message = _get_layer_field_name_lookup(layer)
-			if error_message:
-				LOGGER.warning(
-					"resolve_configured_cols: could not resolve all fields for '%s': %s",
-					layer_name,
-					error_message,
-				)
-				return [], "all_lookup_failed"
-			return list(lookup.values()), "all"
-
-		LOGGER.warning(
-			"resolve_configured_cols: invalid cols string for '%s': %s",
-			layer_name,
-			configured_cols,
-		)
-		return [], "invalid_string"
-
-	if configured_cols is None:
-		return [], "none"
-
-	LOGGER.warning(
-		"resolve_configured_cols: invalid cols type for '%s': %s",
-		layer_name,
-		type(configured_cols).__name__,
-	)
-	return [], "invalid_type"
+    return lookup, None
 
 
-def ensure_cim_field_descriptions(
-	layer: Any,
-	set_visible: bool = True,
-	field_alias_overrides: dict[str, Any] | None = None,
-) -> tuple[bool, int, str]:
-	"""Initialize layer CIM field descriptions from source fields.
+def get_field_names_from_yml(layer: Any, configured_cols: Any) -> tuple[list[str], str]:
+    """Resolve configured cols to an explicit field-name list.
 
-	For feature layers: Uses CIM featureTable.fieldDescriptions.
-	For standalone tables: Uses arcpy.management.AlterField (CIM not fully supported).
+    Supports the special keyword ``all`` (or ``*``) to include all source
+    fields on the layer.
 
-	:param layer: ArcGIS layer object or standalone table.
-	:param set_visible: Whether each new field should be visible (applies to layers only).
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Tuple ``(initialized, field_count, creation_path)``.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
+    :param layer: ArcGIS layer object.
+    :param configured_cols: Raw ``cols`` value from config.
+    :return: Tuple ``(resolved_cols, cols_mode)``.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
 
-	fields, cim, _ = _get_layer_fields_and_descriptions(layer)
+    if isinstance(configured_cols, list):
+        resolved = [
+            field_name
+            for field_name in configured_cols
+            if isinstance(field_name, str) and field_name.strip()
+        ]
+        return resolved, "list"
 
-	if fields is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no readable fields)", layer_name)
-		return False, 0, "none"
+    if isinstance(configured_cols, str):
+        normalized_token = configured_cols.strip().lower()
+        if normalized_token in {"all", "*"}:
+            lookup, error_message = _get_layer_field_name_lookup(layer)
+            if error_message:
+                LOGGER.warning(
+                    "get_field_names_from_yml: could not resolve all fields for '%s': %s",
+                    layer_name,
+                    error_message,
+                )
+                return [], "all_lookup_failed"
+            return list(lookup.values()), "all"
 
-	if cim is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM definition)", layer_name)
-		return False, 0, "none"
+        LOGGER.warning(
+            "get_field_names_from_yml: invalid cols string for '%s': %s",
+            layer_name,
+            configured_cols,
+        )
+        return [], "invalid_string"
 
-	cim_type_name = type(cim).__name__.lower()
-	if "standalonetable" in cim_type_name:
-		LOGGER.debug("ensure_cim_field_descriptions: standalone table detected for '%s'", layer_name)
-		from . import sde_utils
+    if configured_cols is None:
+        return [], "none"
 
-		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
-
-	feature_table = getattr(cim, "featureTable", None)
-	if feature_table is None:
-		# Standalone tables don't have featureTable in CIM; use arcpy.management approach
-		LOGGER.debug("ensure_cim_field_descriptions: using arcpy.management.AlterField for '%s'", layer_name)
-		from . import sde_utils
-
-		return sde_utils.apply_table_field_aliases(layer, field_alias_overrides)
-
-	# Prefer arcpy.cim factory when available, then fall back to CIM builder.
-	try:
-		import arcpy
-	except Exception:
-		arcpy = None
-
-	cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
-	builder = getattr(cim, "_arc_object", None)
-	if cim_module is None and builder is None:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no CIM factory or builder)", layer_name)
-		return False, 0, "none"
-
-	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
-	rebuilt_descriptions = []
-	used_factory = False
-	used_builder = False
-	for field in fields:
-		if isinstance(field, dict):
-			field_name = field.get("name")
-			alias_name = field.get("aliasName")
-		else:
-			field_name = getattr(field, "name", None)
-			alias_name = getattr(field, "aliasName", None)
-		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
-		if not isinstance(field_name, str) or not field_name:
-			continue
-
-		fd = None
-		if cim_module is not None:
-			create_from_class_name = getattr(cim_module, "CreateCIMObjectFromClassName", None)
-			if callable(create_from_class_name):
-				try:
-					fd = create_from_class_name("CIMFieldDescription", "V3")
-					used_factory = True
-				except Exception as exc:
-					LOGGER.debug("ensure_cim_field_descriptions: CIM factory failed for '%s': %s", layer_name, exc)
-
-		if fd is None and builder is not None:
-			try:
-				fd = builder.createObject("CIMFieldDescription")
-				used_builder = True
-			except Exception as exc:
-				LOGGER.debug("ensure_cim_field_descriptions: CIM builder failed for '%s': %s", layer_name, exc)
-
-		if fd is None:
-			continue
-
-		resolved_alias = alias_name if isinstance(alias_name, str) else field_name
-		if not is_system_field(field):
-			resolved_alias = alias_overrides.get(
-				normalized_field_name,
-				generate_field_alias(field_name),
-			)
-
-		setattr(fd, "fieldName", field_name)
-		setattr(fd, "alias", resolved_alias)
-		setattr(fd, "visible", bool(set_visible))
-		rebuilt_descriptions.append(fd)
-
-	if not rebuilt_descriptions:
-		LOGGER.debug("ensure_cim_field_descriptions: skip '%s' (no field descriptions built)", layer_name)
-		return False, 0, "none"
-
-	if used_factory and used_builder:
-		creation_path = "mixed"
-	elif used_factory:
-		creation_path = "factory"
-	elif used_builder:
-		creation_path = "builder"
-	else:
-		creation_path = "none"
-
-	feature_table.fieldDescriptions = rebuilt_descriptions
-	layer.setDefinition(cim)
-	LOGGER.debug(
-		"ensure_cim_field_descriptions: updated '%s' (field_count=%s, creation_path=%s)",
-		layer_name,
-		len(rebuilt_descriptions),
-		creation_path,
-	)
-	return True, len(rebuilt_descriptions), creation_path
+    LOGGER.warning(
+        "get_field_names_from_yml: invalid cols type for '%s': %s",
+        layer_name,
+        type(configured_cols).__name__,
+    )
+    return [], "invalid_type"
 
 
-def reorder_layer_fields(layer: Any, desired_field_order: list[str]) -> int | None:
-	"""Reorder layer fields by config-first then remaining alphabetical.
+def order_cim_feature_table_field_descriptions_by_yml(
+    layer: Any, desired_field_order: list[str]
+) -> int | None:
+    """Reorder CIM feature-table field descriptions by YAML order.
 
-	:param layer: ArcGIS layer object.
-	:param desired_field_order: Desired field order from config.
-	:return: Reordered field count, 0 if unchanged, or None when unavailable.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
-	if not desired_field_order:
-		LOGGER.debug("reorder_layer_fields: skip '%s' (no cols configured)", layer_name)
-		return 0
+    Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions``.
+    Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
-	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
-	if not field_descriptions:
-		LOGGER.debug("reorder_layer_fields: skip '%s' (no field descriptions)", layer_name)
-		return None
+    :param layer: ArcGIS layer object.
+    :param desired_field_order: Desired field order from config.
+    :return: Reordered field count, 0 if unchanged, or None when unavailable.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
+    if not desired_field_order:
+        LOGGER.debug(
+            "order_cim_feature_table_field_descriptions_by_yml: skip '%s' (no cols configured)",
+            layer_name,
+        )
+        return 0
 
-	field_by_name: dict[str, Any] = {}
-	for field_description in field_descriptions:
-		raw_name = getattr(field_description, "fieldName", None) or getattr(
-			field_description, "name", None
-		)
-		normalized = normalize_field_name(raw_name)
-		if normalized and normalized not in field_by_name:
-			field_by_name[normalized] = field_description
+    _, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+    if not field_descriptions:
+        LOGGER.debug(
+            "order_cim_feature_table_field_descriptions_by_yml: skip '%s' (no field descriptions)",
+            layer_name,
+        )
+        return None
 
-	reordered_descriptions = []
-	seen_fields: set[str] = set()
+    field_by_name: dict[str, Any] = {}
+    for field_description in field_descriptions:
+        raw_name = getattr(field_description, "fieldName", None) or getattr(
+            field_description, "name", None
+        )
+        normalized = normalize_field_name(raw_name)
+        if normalized and normalized not in field_by_name:
+            field_by_name[normalized] = field_description
 
-	for field_name in desired_field_order:
-		normalized = normalize_field_name(field_name)
-		if normalized in field_by_name:
-			reordered_descriptions.append(field_by_name[normalized])
-			seen_fields.add(normalized)
+    reordered_descriptions = []
+    seen_fields: set[str] = set()
 
-	remaining_descriptions = []
-	for field_description in field_descriptions:
-		raw_name = getattr(field_description, "fieldName", None) or getattr(
-			field_description, "name", None
-		)
-		normalized = normalize_field_name(raw_name)
-		if normalized not in seen_fields:
-			remaining_descriptions.append(field_description)
+    for field_name in desired_field_order:
+        normalized = normalize_field_name(field_name)
+        if normalized in field_by_name:
+            reordered_descriptions.append(field_by_name[normalized])
+            seen_fields.add(normalized)
 
-	remaining_descriptions.sort(
-		key=lambda field_description: (
-			(getattr(field_description, "fieldName", None) or getattr(field_description, "name", "")).lower()
-		)
-	)
-	reordered_descriptions.extend(remaining_descriptions)
+    remaining_descriptions = []
+    for field_description in field_descriptions:
+        raw_name = getattr(field_description, "fieldName", None) or getattr(
+            field_description, "name", None
+        )
+        normalized = normalize_field_name(raw_name)
+        if normalized not in seen_fields:
+            remaining_descriptions.append(field_description)
 
-	if reordered_descriptions == field_descriptions:
-		LOGGER.debug("reorder_layer_fields: already ordered for '%s'", layer_name)
-		return 0
+    def _field_description_sort_key(field_description: Any) -> str:
+        field_name = getattr(field_description, "fieldName", None)
+        if isinstance(field_name, str):
+            return field_name.lower()
 
-	cim.featureTable.fieldDescriptions = reordered_descriptions
-	layer.setDefinition(cim)
-	LOGGER.debug(
-		"reorder_layer_fields: updated '%s' (field_count=%s)",
-		layer_name,
-		len(reordered_descriptions),
-	)
-	return len(reordered_descriptions)
+        fallback_name = getattr(field_description, "name", None)
+        if isinstance(fallback_name, str):
+            return fallback_name.lower()
+
+        return ""
+
+    remaining_descriptions.sort(key=_field_description_sort_key)
+    reordered_descriptions.extend(remaining_descriptions)
+
+    if reordered_descriptions == field_descriptions:
+        LOGGER.debug(
+            "order_cim_feature_table_field_descriptions_by_yml: already ordered for '%s'",
+            layer_name,
+        )
+        return 0
+
+    cim.featureTable.fieldDescriptions = reordered_descriptions
+    layer.setDefinition(cim)
+    LOGGER.debug(
+        "order_cim_feature_table_field_descriptions_by_yml: updated '%s' (field_count=%s)",
+        layer_name,
+        len(reordered_descriptions),
+    )
+    return len(reordered_descriptions)
 
 
-def set_only_fields_visible(
-	layer: Any,
-	visible_field_names: list[str],
+def set_cim_feature_table_field_descriptions_from_sde(layer: Any) -> tuple[int, int]:
+    """Rebuild CIM feature-table field descriptions from SDE source metadata.
+
+    Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions`` and
+    its ``fieldDescriptions[].alias``, ``fieldDescriptions[].fieldAlias``, and
+    ``fieldDescriptions[].visible`` values.
+
+    Alias behavior:
+    - Preferred source: SDE field alias (``aliasName``/``alias``).
+    - Fallback when missing: generated alias via ``generate_field_alias``.
+
+    The function writes both ``alias`` and ``fieldAlias`` to keep ArcGIS Pro
+    property variants aligned.
+    Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
+
+    :param layer: ArcGIS layer object.
+    :return: Tuple ``(rebuilt_count, total_fields)`` where both values reflect
+            the rebuilt feature-table field-description count.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
+    fields, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+    if fields is None or cim is None:
+        LOGGER.debug(
+            "set_cim_feature_table_field_descriptions_from_sde: skip '%s' (no fields available)",
+            layer_name,
+        )
+        return 0, 0
+
+    feature_table = getattr(cim, "featureTable", None)
+    if feature_table is None:
+        LOGGER.debug(
+            "set_cim_feature_table_field_descriptions_from_sde: skip '%s' (no featureTable on CIM)",
+            layer_name,
+        )
+        return 0, 0
+
+    try:
+        import arcpy  # type: ignore
+    except Exception:
+        arcpy = None
+
+    cim_module = getattr(arcpy, "cim", None) if arcpy is not None else None
+    builder = getattr(cim, "_arc_object", None)
+
+    current_descriptions = list(field_descriptions or [])
+
+    original_description_snapshot = [
+        {
+            "fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
+            "alias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
+        }
+        for fd in current_descriptions
+    ]
+
+    # Always rebuild from datasource to ensure all SDE fields are present.
+    rebuilt: list[Any] = []
+    for field in fields:
+        field_name = (
+            field.get("name")
+            if isinstance(field, dict)
+            else getattr(field, "name", None)
+        )
+        if not isinstance(field_name, str) or not field_name:
+            continue
+        # Source of truth for alias should be SDE field alias.
+        field_alias = (
+            field.get("alias")
+            if isinstance(field, dict)
+            else getattr(field, "aliasName", None)
+        )
+        if isinstance(field_alias, str) and field_alias.strip():
+            LOGGER.debug(
+                "set_cim_feature_table_field_descriptions_from_sde: read alias from SDE for layer '%s' field '%s': '%s'",
+                layer_name,
+                field_name,
+                field_alias,
+            )
+        else:
+            field_alias = generate_field_alias(field_name)
+            LOGGER.warning(
+                "set_cim_feature_table_field_descriptions_from_sde: missing SDE alias for layer '%s' field '%s'; regenerated alias '%s'",
+                layer_name,
+                field_name,
+                field_alias,
+            )
+
+        fd = None
+        if cim_module is not None:
+            create_fn = getattr(cim_module, "CreateCIMObjectFromClassName", None)
+            if callable(create_fn):
+                try:
+                    fd = create_fn("CIMFieldDescription", "V3")
+                except Exception:
+                    fd = None
+        if fd is None and builder is not None:
+            try:
+                fd = builder.createObject("CIMFieldDescription")
+            except Exception:
+                fd = None
+        if fd is None:
+            continue
+
+        fd.fieldName = field_name
+        fd.alias = field_alias
+        # Keep both properties aligned since ArcGIS may expose either alias or fieldAlias.
+        fd.fieldAlias = field_alias
+        fd.visible = True
+        rebuilt.append(fd)
+
+    if not rebuilt:
+        LOGGER.debug(
+            "set_cim_feature_table_field_descriptions_from_sde: skip '%s' (could not build field descriptions)",
+            layer_name,
+        )
+        return 0, 0
+
+    rebuilt_description_snapshot = [
+        {
+            "fieldName": getattr(fd, "fieldName", None) or getattr(fd, "name", None),
+            "alias": getattr(fd, "alias", None) or getattr(fd, "fieldAlias", None),
+        }
+        for fd in rebuilt
+    ]
+    LOGGER.debug(
+        "set_cim_feature_table_field_descriptions_from_sde: '%s' CIM fieldDescriptions original -> updated\noriginal=%s\nupdated=%s",
+        layer_name,
+        original_description_snapshot,
+        rebuilt_description_snapshot,
+    )
+
+    feature_table.fieldDescriptions = rebuilt
+    layer.setDefinition(cim)
+    LOGGER.debug(
+        "set_cim_feature_table_field_descriptions_from_sde: rebuilt '%s' from SDE datasource (count=%s, was=%s)",
+        layer_name,
+        len(rebuilt),
+        len(current_descriptions),
+    )
+    return len(rebuilt), len(rebuilt)
+
+
+def set_cim_feature_table_field_descriptions_visibility_by_yml(
+    layer: Any,
+    visible_field_names: list[str],
 ) -> tuple[int, int, int, int, int, list[str]]:
-	"""Set visibility so only configured fields are visible.
+    """Set CIM field-description visibility from YAML field list.
 
-	:param layer: ArcGIS layer object.
-	:param visible_field_names: Configured visible field list.
-	:return: Visibility summary tuple.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
-	if not visible_field_names:
-		LOGGER.debug("set_only_fields_visible: skip '%s' (no cols configured)", layer_name)
-		return 0, 0, 0, 0, 0, []
+    Updates CIM object ``CIMVectorLayer.featureTable.fieldDescriptions[].visible``.
+    Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
-	_, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
-	if field_descriptions is None:
-		LOGGER.debug("set_only_fields_visible: skip '%s' (no field descriptions)", layer_name)
-		return 0, 0, 0, 0, 0, []
+    :param layer: ArcGIS layer object.
+    :param visible_field_names: Configured visible field list.
+    :return: Visibility summary tuple.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
+    if not visible_field_names:
+        LOGGER.debug(
+            "set_cim_feature_table_field_descriptions_visibility_by_yml: skip '%s' (no cols configured)",
+            layer_name,
+        )
+        return 0, 0, 0, 0, 0, []
 
-	visible_set = {
-		normalized
-		for normalized in (normalize_field_name(name) for name in visible_field_names)
-		if normalized
-	}
+    _, cim, field_descriptions = _get_layer_fields_and_descriptions(layer)
+    if field_descriptions is None:
+        LOGGER.debug(
+            "set_cim_feature_table_field_descriptions_visibility_by_yml: skip '%s' (no field descriptions)",
+            layer_name,
+        )
+        return 0, 0, 0, 0, 0, []
 
-	made_visible = 0
-	made_hidden = 0
+    visible_set = {
+        normalized
+        for normalized in (normalize_field_name(name) for name in visible_field_names)
+        if normalized
+    }
 
-	for field_description in field_descriptions:
-		raw_name = getattr(field_description, "fieldName", None) or getattr(
-			field_description, "name", None
-		)
-		normalized = normalize_field_name(raw_name)
-		should_be_visible = normalized in visible_set
-		current_visible = getattr(field_description, "visible", True)
+    made_visible = 0
+    made_hidden = 0
 
-		if should_be_visible and not current_visible:
-			field_description.visible = True
-			made_visible += 1
-		elif not should_be_visible and current_visible:
-			field_description.visible = False
-			made_hidden += 1
+    for field_description in field_descriptions:
+        raw_name = getattr(field_description, "fieldName", None) or getattr(
+            field_description, "name", None
+        )
+        normalized = normalize_field_name(raw_name)
+        should_be_visible = normalized in visible_set
+        current_visible = getattr(field_description, "visible", True)
 
-	if made_visible > 0 or made_hidden > 0:
-		layer.setDefinition(cim)
+        if should_be_visible and not current_visible:
+            field_description.visible = True
+            made_visible += 1
+        elif not should_be_visible and current_visible:
+            field_description.visible = False
+            made_hidden += 1
 
-	final_visible = 0
-	final_hidden = 0
-	available_names: set[str] = set()
-	for field_description in field_descriptions:
-		raw_name = getattr(field_description, "fieldName", None) or getattr(
-			field_description, "name", None
-		)
-		normalized = normalize_field_name(raw_name)
-		if normalized:
-			available_names.add(normalized)
-		if getattr(field_description, "visible", True):
-			final_visible += 1
-		else:
-			final_hidden += 1
+    if made_visible > 0 or made_hidden > 0:
+        layer.setDefinition(cim)
 
-	target_visible = len(visible_set.intersection(available_names))
-	missing_config_fields = [
-		name
-		for name in visible_field_names
-		if normalize_field_name(name) not in available_names
-	]
-	LOGGER.debug(
-		"set_only_fields_visible: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
-		layer_name,
-		made_visible,
-		made_hidden,
-		target_visible,
-		len(missing_config_fields),
-	)
+    final_visible = 0
+    final_hidden = 0
+    available_names: set[str] = set()
+    for field_description in field_descriptions:
+        raw_name = getattr(field_description, "fieldName", None) or getattr(
+            field_description, "name", None
+        )
+        normalized = normalize_field_name(raw_name)
+        if normalized:
+            available_names.add(normalized)
+        if getattr(field_description, "visible", True):
+            final_visible += 1
+        else:
+            final_hidden += 1
 
-	return (
-		made_visible,
-		made_hidden,
-		final_visible,
-		final_hidden,
-		target_visible,
-		missing_config_fields,
-	)
+    target_visible = len(visible_set.intersection(available_names))
+    missing_config_fields = [
+        name
+        for name in visible_field_names
+        if normalize_field_name(name) not in available_names
+    ]
+    LOGGER.debug(
+        "set_cim_feature_table_field_descriptions_visibility_by_yml: updated '%s' (made_visible=%s, made_hidden=%s, target_visible=%s, missing=%s)",
+        layer_name,
+        made_visible,
+        made_hidden,
+        target_visible,
+        len(missing_config_fields),
+    )
+
+    return (
+        made_visible,
+        made_hidden,
+        final_visible,
+        final_hidden,
+        target_visible,
+        missing_config_fields,
+    )
 
 
-def check_and_update_item_visibility(
-	item: Any,
-	expected_visible: Any,
+def set_cim_layer_definition_visibility(
+    item: Any,
+    expected_visible: Any,
 ) -> tuple[Any, bool, str]:
-	"""Check map item visibility and update when needed.
+    """Set CIM layer/table visibility from configuration.
 
-	Supports both feature layers and standalone tables. Uses direct ``visible``
-	property when available, then falls back to common CIM visibility attributes.
+    Updates the ``visibility`` attribute in CIMLayerDefinition for layers and
+    CIMStandaloneTable for tables. Applies configuration value and reports
+    whether visibility matches expected state.
 
-	:param item: ArcGIS map item object (layer or table).
-	:param expected_visible: Configured visibility (typically bool).
-	:return: Tuple ``(is_correct, was_updated, info_message)``.
-	"""
-	item_name = getattr(item, "name", "<unknown>")
-	if expected_visible is None:
-		LOGGER.debug("check_and_update_item_visibility: skip '%s' (no visible configured)", item_name)
-		return None, False, "No visible configured"
+    :param item: ArcGIS map layer or table object.
+    :param expected_visible: Expected visibility (typically bool).
+    :return: Tuple ``(is_correct, was_updated, info_message)``.
+    """
+    item_name = getattr(item, "name", "<unknown>")
+    if expected_visible is None:
+        LOGGER.debug(
+            "set_cim_layer_definition_visibility: skip '%s' (no visible configured)",
+            item_name,
+        )
+        return None, False, "No visible configured"
 
-	if not isinstance(expected_visible, bool):
-		LOGGER.debug("check_and_update_item_visibility: skip '%s' (invalid visible value)", item_name)
-		return None, False, "Configured visible must be true/false"
+    if not isinstance(expected_visible, bool):
+        LOGGER.debug(
+            "set_cim_layer_definition_visibility: skip '%s' (invalid visible value)",
+            item_name,
+        )
+        return None, False, "Configured visible must be true/false"
 
-	# Preferred path: direct ArcPy property.
-	if hasattr(item, "visible"):
-		try:
-			current_visible = bool(getattr(item, "visible"))
-			if current_visible == expected_visible:
-				return True, False, f"visible={current_visible}"
-			setattr(item, "visible", expected_visible)
-			return False, True, f"visible={expected_visible}"
-		except Exception as exc:
-			LOGGER.debug(
-				"check_and_update_item_visibility: direct property failed for '%s': %s",
-				item_name,
-				exc,
-			)
+    try:
+        import arcpy  # type: ignore
 
-	# Fallback: CIM attribute update.
-	try:
-		item_cim = item.getDefinition("V3")
-		for attr_name in ("visibility", "visible", "isVisible"):
-			if not hasattr(item_cim, attr_name):
-				continue
+        item_cim = item.getDefinition("V3")
+        current_visible = bool(getattr(item_cim, "visibility", False))
+        if current_visible == expected_visible:
+            LOGGER.debug(
+                "set_cim_layer_definition_visibility: '%s' visibility=%s (no change needed)",
+                item_name,
+                current_visible,
+            )
+            return True, False, f"visibility={current_visible}"
 
-			current_visible = bool(getattr(item_cim, attr_name))
-			if current_visible == expected_visible:
-				return True, False, f"{attr_name}={current_visible}"
-
-			setattr(item_cim, attr_name, expected_visible)
-			item.setDefinition(item_cim)
-			return False, True, f"{attr_name}={expected_visible}"
-
-		return None, False, "Visibility property is not available for this item"
-	except Exception as exc:
-		LOGGER.warning("check_and_update_item_visibility: failed for '%s': %s", item_name, exc)
-		return None, False, f"Could not set visibility: {exc}"
+        item_cim.visibility = expected_visible
+        item.setDefinition(item_cim)
+        LOGGER.debug(
+            "set_cim_layer_definition_visibility: '%s' visibility=%s (updated)",
+            item_name,
+            expected_visible,
+        )
+        return False, True, f"visibility={expected_visible}"
+    except Exception as exc:
+        LOGGER.warning(
+            "set_cim_layer_definition_visibility: failed for '%s': %s", item_name, exc
+        )
+        return None, False, f"Could not set visibility: {exc}"
 
 
 def check_and_update_definition_query(
-	item: Any,
-	expected_query: Any,
+    item: Any,
+    expected_query: Any,
 ) -> tuple[Any, bool, str]:
-	"""Check map item definition query and update when needed.
+    """Check map item definition query and update when needed.
 
-	Supports feature layers and standalone tables. Uses direct
-	``definitionQuery`` property when available, then falls back to CIM
-	``definitionExpression`` when possible.
+    Supports feature layers and standalone tables. Uses direct
+    ``definitionQuery`` property when available, then falls back to CIM
+    ``definitionExpression`` when possible.
 
-	:param item: ArcGIS map item object (layer or table).
-	:param expected_query: Configured SQL where-clause string.
-	:return: Tuple ``(is_correct, was_updated, info_message)``.
-	"""
-	item_name = getattr(item, "name", "<unknown>")
-	if expected_query is None:
-		LOGGER.debug("check_and_update_definition_query: skip '%s' (no definition_query configured)", item_name)
-		return None, False, "No definition_query configured"
+    :param item: ArcGIS map item object (layer or table).
+    :param expected_query: Configured SQL where-clause string.
+    :return: Tuple ``(is_correct, was_updated, info_message)``.
+    """
+    item_name = getattr(item, "name", "<unknown>")
+    if expected_query is None:
+        LOGGER.debug(
+            "check_and_update_definition_query: skip '%s' (no definition_query configured)",
+            item_name,
+        )
+        return None, False, "No definition_query configured"
 
-	if not isinstance(expected_query, str):
-		LOGGER.debug("check_and_update_definition_query: skip '%s' (invalid definition_query)", item_name)
-		return None, False, "Configured definition_query must be a string"
+    if not isinstance(expected_query, str):
+        LOGGER.debug(
+            "check_and_update_definition_query: skip '%s' (invalid definition_query)",
+            item_name,
+        )
+        return None, False, "Configured definition_query must be a string"
 
-	desired_query = expected_query.strip()
+    desired_query = expected_query.strip()
 
-	# Preferred path: direct ArcPy property.
-	if hasattr(item, "definitionQuery"):
-		try:
-			current_query_raw = getattr(item, "definitionQuery", "")
-			current_query = current_query_raw.strip() if isinstance(current_query_raw, str) else ""
-			if current_query == desired_query:
-				return True, False, current_query
-			setattr(item, "definitionQuery", desired_query)
-			return False, True, desired_query
-		except Exception as exc:
-			LOGGER.debug(
-				"check_and_update_definition_query: direct property failed for '%s': %s",
-				item_name,
-				exc,
-			)
+    # Preferred path: direct ArcPy property.
+    if hasattr(item, "definitionQuery"):
+        try:
+            current_query_raw = getattr(item, "definitionQuery", "")
+            current_query = (
+                current_query_raw.strip() if isinstance(current_query_raw, str) else ""
+            )
+            if current_query == desired_query:
+                return True, False, current_query
+            item.definitionQuery = desired_query
+            return False, True, desired_query
+        except Exception as exc:
+            LOGGER.debug(
+                "check_and_update_definition_query: direct property failed for '%s': %s",
+                item_name,
+                exc,
+            )
 
-	# Fallback: CIM attribute update.
-	try:
-		item_cim = item.getDefinition("V3")
-		for attr_name in ("definitionExpression", "definitionQuery"):
-			if not hasattr(item_cim, attr_name):
-				continue
+    # Fallback: CIM attribute update.
+    try:
+        item_cim = item.getDefinition("V3")
+        for attr_name in ("definitionExpression", "definitionQuery"):
+            if not hasattr(item_cim, attr_name):
+                continue
 
-			current_query_raw = getattr(item_cim, attr_name, "")
-			current_query = current_query_raw.strip() if isinstance(current_query_raw, str) else ""
-			if current_query == desired_query:
-				return True, False, current_query
+            current_query_raw = getattr(item_cim, attr_name, "")
+            current_query = (
+                current_query_raw.strip() if isinstance(current_query_raw, str) else ""
+            )
+            if current_query == desired_query:
+                return True, False, current_query
 
-			setattr(item_cim, attr_name, desired_query)
-			item.setDefinition(item_cim)
-			return False, True, desired_query
+            # setattr() required here because attr_name is dynamic (definitionExpression or definitionQuery)
+            setattr(item_cim, attr_name, desired_query)
+            item.setDefinition(item_cim)
+            return False, True, desired_query
 
-		return None, False, "Definition query property is not available for this item"
-	except Exception as exc:
-		LOGGER.warning("check_and_update_definition_query: failed for '%s': %s", item_name, exc)
-		return None, False, f"Could not set definition query: {exc}"
-
-
-def check_and_update_service_id(layer: Any, expected_service_id: Any) -> tuple[bool, bool]:
-	"""Apply YAML-configured service id to a layer or standalone table.
-
-	Reads the current service id from the first available CIM attribute and
-	updates only when it differs from ``expected_service_id``.
-
-	Supported CIM attributes (in lookup order):
-	- ``serviceLayerId``
-	- ``serviceLayerID``
-	- ``serviceTableId``
-	- ``serviceTableID``
-
-	:param layer: ArcGIS map item (feature layer or standalone table).
-	:param expected_service_id: Value from YAML ``service_id``.
-	:return: Tuple ``(is_correct, was_updated)``.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
-	if expected_service_id is None:
-		LOGGER.debug("check_and_update_service_id: skip '%s' (no service_id configured)", layer_name)
-		return True, False
-
-	try:
-		expected_id = int(expected_service_id)
-	except Exception:
-		LOGGER.warning(
-			"check_and_update_service_id: skip '%s' (invalid configured service_id: %r)",
-			layer_name,
-			expected_service_id,
-		)
-		return False, False
-
-	try:
-		layer_cim = layer.getDefinition("V3")
-		service_id_attrs = (
-			"serviceLayerId",
-			"serviceLayerID",
-			"serviceTableId",
-			"serviceTableID",
-		)
-		target_attr = next(
-			(attr_name for attr_name in service_id_attrs if hasattr(layer_cim, attr_name)),
-			None,
-		)
-		if target_attr is None:
-			LOGGER.warning(
-				"check_and_update_service_id: failed for '%s': no CIM service id attribute found",
-				layer_name,
-			)
-			return False, False
-
-		attr_value = getattr(layer_cim, target_attr, None)
-		try:
-			current_id = int(attr_value) if attr_value is not None else None
-		except Exception:
-			current_id = None
-
-		if current_id == expected_id:
-			LOGGER.debug("check_and_update_service_id: already correct for '%s' (%s)", layer_name, current_id)
-			return True, False
-
-		setattr(layer_cim, target_attr, expected_id)
-		layer.setDefinition(layer_cim)
-		LOGGER.debug(
-			"check_and_update_service_id: updated '%s' (%s -> %s)",
-			layer_name,
-			current_id,
-			expected_id,
-		)
-		return False, True
-	except Exception as exc:
-		LOGGER.warning("check_and_update_service_id: failed for '%s': %s", layer_name, exc)
-		return False, False
+        return None, False, "Definition query property is not available for this item"
+    except Exception as exc:
+        LOGGER.warning(
+            "check_and_update_definition_query: failed for '%s': %s", item_name, exc
+        )
+        return None, False, f"Could not set definition query: {exc}"
 
 
-def configure_display_field(
-	layer: Any,
-	display_field_name: Any,
+def set_cim_layer_definition_service_id(
+    layer: Any, expected_service_id: Any
+) -> tuple[bool, bool]:
+    """Set CIM service id for a layer or standalone table.
+
+    Updates CIM object ``CIMLayerDefinition.serviceLayerID`` for layers and
+    ``CIMStandaloneTable.serviceTableID`` for standalone tables.
+    Specs:
+    - https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimlayerdefinition-8
+    - https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMStandaloneTable.md
+
+    Supported CIM attributes (in lookup order):
+    - ``serviceLayerID``
+    - ``serviceTableID``
+
+    :param layer: ArcGIS map item (feature layer or standalone table).
+    :param expected_service_id: Value from YAML ``service_id``.
+    :return: Tuple ``(is_correct, was_updated)``.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
+    if expected_service_id is None:
+        LOGGER.debug(
+            "set_cim_layer_definition_service_id: skip '%s' (no service_id configured)",
+            layer_name,
+        )
+        return True, False
+
+    try:
+        expected_id = int(expected_service_id)
+    except Exception:
+        LOGGER.warning(
+            "set_cim_layer_definition_service_id: skip '%s' (invalid configured service_id: %r)",
+            layer_name,
+            expected_service_id,
+        )
+        return False, False
+
+    try:
+        layer_cim = layer.getDefinition("V3")
+
+        if hasattr(layer_cim, "serviceLayerID"):
+            target_attr = "serviceLayerID"
+        elif hasattr(layer_cim, "serviceTableID"):
+            target_attr = "serviceTableID"
+        else:
+            LOGGER.warning(
+                "set_cim_layer_definition_service_id: failed for '%s': missing canonical CIM field "
+                "('serviceLayerID' or 'serviceTableID')",
+                layer_name,
+            )
+            return False, False
+
+        attr_value = getattr(layer_cim, target_attr, None)
+        try:
+            current_id = int(attr_value) if attr_value is not None else None
+        except Exception:
+            current_id = None
+
+        if current_id == expected_id:
+            LOGGER.debug(
+                "set_cim_layer_definition_service_id: already correct for '%s' (%s)",
+                layer_name,
+                current_id,
+            )
+            return True, False
+
+        # setattr() required here because target_attr is dynamic (serviceLayerID or serviceTableID)
+        setattr(layer_cim, target_attr, expected_id)
+        layer.setDefinition(layer_cim)
+        LOGGER.debug(
+            "set_cim_layer_definition_service_id: updated '%s' (%s -> %s) via %s",
+            layer_name,
+            current_id,
+            expected_id,
+            target_attr,
+        )
+        return False, True
+    except Exception as exc:
+        LOGGER.warning(
+            "set_cim_layer_definition_service_id: failed for '%s': %s", layer_name, exc
+        )
+        return False, False
+
+
+def set_cim_feature_table_display_field(
+    layer: Any,
+    display_field_name: Any,
 ) -> tuple[Any, bool, str]:
-	"""Set display field when configured field exists on layer.
+    """Set the configured display field or the first field in the layer order.
 
-	:param layer: ArcGIS layer object.
-	:param display_field_name: Configured display field.
-	:return: Tuple ``(is_correct, was_updated, info_message)``.
-	"""
-	layer_name = getattr(layer, "name", "<unknown>")
-	if not isinstance(display_field_name, str) or not display_field_name.strip():
-		LOGGER.debug("configure_display_field: skip '%s' (no display_field configured)", layer_name)
-		return None, False, "No display_field configured"
+    Updates CIM object ``CIMVectorLayer.featureTable.displayField``.
+    When no display field is configured, use the first named field description.
+    Store the field name, not its alias; existing field aliases are preserved.
+    Spec: https://github.com/Esri/cim-spec/blob/main/docs/v3/CIMVectorLayers.md#cimfeaturetable
 
-	requested = display_field_name.strip()
-	requested_normalized = normalize_field_name(requested)
-	if requested_normalized is None:
-		LOGGER.debug("configure_display_field: skip '%s' (empty display_field)", layer_name)
-		return None, False, "Configured display_field is empty after normalization"
+    :param layer: ArcGIS layer object.
+    :param display_field_name: Configured display field, or None for the first field.
+    :return: Tuple ``(is_correct, was_updated, info_message)``.
+    """
+    layer_name = getattr(layer, "name", "<unknown>")
+    if not isinstance(display_field_name, str) or not display_field_name.strip():
+        try:
+            layer_cim = layer.getDefinition("V3")
+            feature_table = getattr(layer_cim, "featureTable", None)
+            field_descriptions = getattr(feature_table, "fieldDescriptions", None)
+            display_field_name = next(
+                (
+                    field_name
+                    for description in field_descriptions or []
+                    if isinstance(
+                        field_name := getattr(description, "fieldName", None), str
+                    )
+                    and field_name.strip()
+                ),
+                None,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "set_cim_feature_table_display_field: failed to resolve first field for '%s': %s",
+                layer_name,
+                exc,
+            )
+            return None, False, f"Could not resolve first display field: {exc}"
+        if display_field_name is None:
+            return (
+                None,
+                False,
+                "No field descriptions available for default display field",
+            )
+        LOGGER.debug(
+            "set_cim_feature_table_display_field: use first field for '%s': %s",
+            layer_name,
+            display_field_name,
+        )
 
-	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
-	if error_message:
-		LOGGER.warning("configure_display_field: field lookup failed for '%s': %s", layer_name, error_message)
-		return None, False, error_message
+    requested = display_field_name.strip()
+    requested_normalized = normalize_field_name(requested)
+    if requested_normalized is None:
+        LOGGER.debug(
+            "set_cim_feature_table_display_field: skip '%s' (empty display_field)",
+            layer_name,
+        )
+        return None, False, "Configured display_field is empty after normalization"
 
-	if requested_normalized not in available_by_normalized:
-		LOGGER.debug(
-			"configure_display_field: requested field not found for '%s' (requested=%s)",
-			layer_name,
-			requested,
-		)
-		return None, False, f"Configured display_field '{requested}' not found in layer fields"
+    available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
+    if error_message:
+        LOGGER.warning(
+            "set_cim_feature_table_display_field: field lookup failed for '%s': %s",
+            layer_name,
+            error_message,
+        )
+        return None, False, error_message
 
-	resolved_field_name = available_by_normalized[requested_normalized]
+    if requested_normalized not in available_by_normalized:
+        LOGGER.debug(
+            "set_cim_feature_table_display_field: requested field not found for '%s' (requested=%s)",
+            layer_name,
+            requested,
+        )
+        return (
+            None,
+            False,
+            f"Configured display_field '{requested}' not found in layer fields",
+        )
 
-	try:
-		layer_cim = layer.getDefinition("V3")
-		feature_table = getattr(layer_cim, "featureTable", None)
-		if feature_table is None:
-			return None, False, "Layer CIM does not expose featureTable"
+    resolved_field_name = available_by_normalized[requested_normalized]
 
-		current_display = getattr(feature_table, "displayField", None)
-		if normalize_field_name(current_display) == requested_normalized:
-			LOGGER.debug(
-				"configure_display_field: already correct for '%s' (%s)",
-				layer_name,
-				resolved_field_name,
-			)
-			return True, False, resolved_field_name
+    try:
+        layer_cim = layer.getDefinition("V3")
+        feature_table = getattr(layer_cim, "featureTable", None)
+        if feature_table is None:
+            return None, False, "Layer CIM does not expose featureTable"
 
-		setattr(feature_table, "displayField", resolved_field_name)
-		layer.setDefinition(layer_cim)
-		LOGGER.debug(
-			"configure_display_field: updated '%s' (%s)",
-			layer_name,
-			resolved_field_name,
-		)
-		return False, True, resolved_field_name
-	except Exception as exc:
-		LOGGER.warning("configure_display_field: failed for '%s': %s", layer_name, exc)
-		return None, False, f"Could not set display field: {exc}"
+        current_display = getattr(feature_table, "displayField", None)
+        if normalize_field_name(current_display) == requested_normalized:
+            LOGGER.debug(
+                "set_cim_feature_table_display_field: already correct for '%s' (%s)",
+                layer_name,
+                resolved_field_name,
+            )
+            return True, False, resolved_field_name
+
+        feature_table.displayField = resolved_field_name
+        layer.setDefinition(layer_cim)
+        LOGGER.debug(
+            "set_cim_feature_table_display_field: updated '%s' (%s)",
+            layer_name,
+            resolved_field_name,
+        )
+        return False, True, resolved_field_name
+    except Exception as exc:
+        LOGGER.warning(
+            "set_cim_feature_table_display_field: failed for '%s': %s", layer_name, exc
+        )
+        return None, False, f"Could not set display field: {exc}"
 
 
-def configure_popup_fields_from_visible(
-	layer: Any,
-	visible_field_names: list[str],
+def set_cim_popup_info_fields_by_yml(
+    layer: Any,
+    popup_title_override: Any = None,
+    popup_description_template: Any = None,
 ) -> tuple[Any, bool, str]:
-	"""Configure popup fields from configured visible field order.
+    """Configure popup fields with optional title and description overrides.
 
-	:param layer: ArcGIS layer object.
-	:param visible_field_names: Configured visible field list.
-	:return: Tuple ``(is_correct, was_updated, info_message)``.
-	"""
-	import arcpy
-	layer_name = getattr(layer, "name", "<unknown>")
+    Sets ``CIMPopupInfo.mediaInfos[].useLayerFields = True`` and populates the
+    ``fields`` array with all visible field names from ``featureTable.fieldDescriptions``.
+    By default, the popup title uses the display-field value token, or is empty
+    when no display field exists. The caption is empty unless configured.
 
-	if not isinstance(visible_field_names, list) or not visible_field_names:
-		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no cols configured)", layer_name)
-		return None, False, "No cols configured"
+    Matches ArcGIS Server REST API expectations for popup configuration.
+    Note that popup field order is only visible in ArcGIS Pro and not reflected when published as Map Server or Feature Server
+    Instead publish as Hosted featuer layer to AGOL to maintain field order in popup. See Esri support article for details:
+    https://support.esri.com/en-us/knowledge-base/problem-pop-up-configuration-from-arcgis-pro-is-not-ret-000034868
 
-	normalized_requested: list[str] = []
-	seen: set[str] = set()
-	for name in visible_field_names:
-		normalized = normalize_field_name(name)
-		if normalized and normalized not in seen:
-			seen.add(normalized)
-			normalized_requested.append(normalized)
+    :param layer: ArcGIS layer object.
+    :param popup_title_override: Optional title overriding the display-field token.
+    :param popup_description_template: Optional popup description template.
+            Supports tokens ``{display_field_label}`` and ``{display_field_value}``.
+    :return: Tuple ``(is_correct, was_updated, info_message)`` where:
+            - ``is_correct`` indicates whether popup was already configured correctly,
+            - ``was_updated`` indicates whether CIM was written,
+            - ``info_message`` provides a short status summary.
+    """
+    import arcpy  # type: ignore
 
-	if not normalized_requested:
-		LOGGER.debug("configure_popup_fields_from_visible: skip '%s' (no valid cols)", layer_name)
-		return None, False, "No valid field names in cols"
+    layer_name = getattr(layer, "name", "<unknown>")
 
-	available_by_normalized, error_message = _get_layer_field_name_lookup(layer)
-	if error_message:
-		LOGGER.warning("configure_popup_fields_from_visible: field lookup failed for '%s': %s", layer_name, error_message)
-		return None, False, error_message
+    cim_module = getattr(arcpy, "cim", None)
+    if cim_module is None:
+        LOGGER.warning(
+            "set_cim_popup_info_fields_by_yml: arcpy.cim missing for '%s'", layer_name
+        )
+        return None, False, "arcpy.cim is not available in this ArcGIS Pro environment"
 
-	popup_fields = [
-		available_by_normalized[name]
-		for name in normalized_requested
-		if name in available_by_normalized
-	]
-	if not popup_fields:
-		LOGGER.debug("configure_popup_fields_from_visible: no fields found for '%s' from configured cols", layer_name)
-		return None, False, "No configured cols fields were found in layer"
+    try:
+        layer_cim = layer.getDefinition("V3")
+        feature_table = getattr(layer_cim, "featureTable", None)
+        configured_popup_title = (
+            popup_title_override.strip()
+            if isinstance(popup_title_override, str) and popup_title_override.strip()
+            else None
+        )
+        configured_popup_description_template = (
+            popup_description_template.strip()
+            if isinstance(popup_description_template, str)
+            and popup_description_template.strip()
+            else None
+        )
 
-	cim_module = getattr(arcpy, "cim", None)
-	if cim_module is None:
-		LOGGER.warning("configure_popup_fields_from_visible: arcpy.cim missing for '%s'", layer_name)
-		return None, False, "arcpy.cim is not available in this ArcGIS Pro environment"
+        # Resolve display-field token and label for popup title and caption.
+        display_field_name = (
+            getattr(feature_table, "displayField", None)
+            if feature_table is not None
+            else None
+        )
+        display_field_token = ""
+        if isinstance(display_field_name, str) and display_field_name.strip():
+            display_field_token = f"{{{display_field_name}}}"
 
-	try:
-		layer_cim = layer.getDefinition("V3")
+        expected_title = configured_popup_title or display_field_token
+        display_field_label = ""
 
-		popup_ns = getattr(cim_module, "CIMPopup", None)
-		if (
-			popup_ns is not None
-			and hasattr(popup_ns, "CIMTableMediaInfo")
-			and hasattr(popup_ns, "CIMPopupInfo")
-		):
-			table_media = popup_ns.CIMTableMediaInfo()
-			popup_info = popup_ns.CIMPopupInfo()
-		else:
-			table_media = cim_module.CreateCIMObjectFromClassName("CIMTableMediaInfo", "V3")
-			popup_info = cim_module.CreateCIMObjectFromClassName("CIMPopupInfo", "V3")
+        # Extract visible field names from featureTable.fieldDescriptions
+        visible_field_names = []
+        if feature_table is not None:
+            field_descs = getattr(feature_table, "fieldDescriptions", None)
+            if isinstance(field_descs, list):
+                for field_desc in field_descs:
+                    field_name = getattr(field_desc, "fieldName", None)
+                    if (
+                        isinstance(field_name, str)
+                        and isinstance(display_field_name, str)
+                        and normalize_field_name(field_name)
+                        == normalize_field_name(display_field_name)
+                    ):
+                        alias = getattr(field_desc, "alias", None) or getattr(
+                            field_desc, "fieldAlias", None
+                        )
+                        if isinstance(alias, str) and alias.strip():
+                            display_field_label = alias.strip()
+                        elif field_name.strip():
+                            display_field_label = field_name.strip()
 
-		table_media.fields = popup_fields
-		popup_info.mediaInfos = [table_media]
+                    is_visible = getattr(field_desc, "visible", False)
+                    if (
+                        is_visible
+                        and isinstance(field_name, str)
+                        and field_name.strip()
+                    ):
+                        visible_field_names.append(field_name)
 
-		current_popup = getattr(layer_cim, "popupInfo", None)
-		current_media = (
-			getattr(current_popup, "mediaInfos", None)
-			if current_popup is not None
-			else None
-		)
-		current_fields = None
-		if isinstance(current_media, list) and current_media:
-			current_fields = getattr(current_media[0], "fields", None)
+        empty_html = "<div><p><span></span></p></div>"
+        caption_html = empty_html
+        if configured_popup_description_template is not None:
+            caption_text = configured_popup_description_template
+            caption_text = caption_text.replace(
+                "{display_field_label}", display_field_label
+            )
+            caption_text = caption_text.replace(
+                "{display_field_value}", display_field_token
+            )
+            caption_html = f"<div><p><span>{caption_text}</span></p></div>"
 
-		if isinstance(current_fields, list) and [str(field) for field in current_fields] == popup_fields:
-			LOGGER.debug(
-				"configure_popup_fields_from_visible: already correct for '%s' (field_count=%s)",
-				layer_name,
-				len(popup_fields),
-			)
-			return True, False, f"Configured {len(popup_fields)} popup field(s)"
+        # Check if already configured correctly
+        current_popup = getattr(layer_cim, "popupInfo", None)
+        if current_popup is not None:
+            current_media = getattr(current_popup, "mediaInfos", None)
+            if isinstance(current_media, list) and current_media:
+                current_use_layer_fields = getattr(
+                    current_media[0], "useLayerFields", None
+                )
+                current_title = getattr(current_popup, "title", None)
+                current_fields = getattr(current_media[0], "fields", None)
+                current_caption = getattr(current_media[0], "caption", None)
+                if (
+                    current_use_layer_fields is True
+                    and current_title == expected_title
+                    and getattr(current_popup, "showTitle", None)
+                    == bool(expected_title)
+                    and current_fields == visible_field_names
+                    and current_caption == caption_html
+                ):
+                    LOGGER.debug(
+                        "set_cim_popup_info_fields_by_yml: already correct for '%s' (useLayerFields=True, title=%r, %d fields)",
+                        layer_name,
+                        expected_title,
+                        len(visible_field_names),
+                    )
+                    return (
+                        True,
+                        False,
+                        f"Popup configured with {len(visible_field_names)} visible fields, title {expected_title!r}",
+                    )
 
-		layer_cim.popupInfo = popup_info
-		layer.setDefinition(layer_cim)
-		LOGGER.debug(
-			"configure_popup_fields_from_visible: updated '%s' (field_count=%s)",
-			layer_name,
-			len(popup_fields),
-		)
-		return False, True, f"Configured {len(popup_fields)} popup field(s)"
-	except Exception as exc:
-		LOGGER.warning("configure_popup_fields_from_visible: failed for '%s': %s", layer_name, exc)
-		return None, False, f"Could not set popupInfo from cols: {exc}"
+        # Build CIMTableMediaInfo with useLayerFields=True and explicit fields array
+        popup_ns = getattr(cim_module, "CIMPopup", None)
+        if (
+            popup_ns is not None
+            and hasattr(popup_ns, "CIMTableMediaInfo")
+            and hasattr(popup_ns, "CIMPopupInfo")
+        ):
+            table_media = popup_ns.CIMTableMediaInfo()
+            popup_info = current_popup or popup_ns.CIMPopupInfo()
+        else:
+            table_media = cim_module.CreateCIMObjectFromClassName(
+                "CIMTableMediaInfo", "V3"
+            )
+            popup_info = current_popup or cim_module.CreateCIMObjectFromClassName(
+                "CIMPopupInfo", "V3"
+            )
 
+        # Configure popup with visible fields, resolved title, and display-field caption.
+        table_media.useLayerFields = True
+        table_media.fields = visible_field_names
+        table_media.caption = caption_html
+        table_media.title = empty_html
 
-def normalize_sde_field_aliases(
-	dataset_path: str,
-	field_alias_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-	"""Normalize and update field aliases on one SDE dataset.
+        popup_info.mediaInfos = [table_media]
+        popup_info.title = expected_title
+        popup_info.showTitle = bool(expected_title)
 
-	All non-system fields are evaluated. System fields (OID, geometry, GlobalID)
-	are skipped. Manual overrides from field_alias_overrides take precedence over
-	auto-generation.
-
-	:param dataset_path: Full path to SDE dataset or feature class.
-	:param field_alias_overrides: Optional field-name to alias override mapping.
-	:return: Summary dictionary with counts and changed fields.
-	"""
-	import arcpy
-
-	alias_overrides = normalize_field_alias_overrides(field_alias_overrides)
-	changes: list[dict[str, str]] = []
-	skipped: list[str] = []
-	errors: list[dict[str, str]] = []
-
-	try:
-		fields = arcpy.ListFields(dataset_path)
-	except Exception as exc:
-		return {
-			"dataset_path": dataset_path,
-			"exists": False,
-			"error": str(exc),
-			"fields_processed": 0,
-			"fields_changed": 0,
-			"fields_skipped": 0,
-			"fields_errored": 0,
-			"changes": [],
-			"skipped": [],
-			"errors": [],
-		}
-
-	if not fields:
-		return {
-			"dataset_path": dataset_path,
-			"exists": True,
-			"error": None,
-			"fields_processed": 0,
-			"fields_changed": 0,
-			"fields_skipped": 0,
-			"fields_errored": 0,
-			"changes": [],
-			"skipped": [],
-			"errors": [],
-		}
-
-	for field in fields:
-		field_name = getattr(field, "name", None)
-		if not isinstance(field_name, str):
-			continue
-
-		if is_system_field(field):
-			skipped.append(field_name)
-			continue
-
-		normalized_field_name = normalize_field_name(field_name) or field_name.strip().lower()
-		resolved_alias = alias_overrides.get(
-			normalized_field_name,
-			generate_field_alias(field_name),
-		)
-
-		current_alias = getattr(field, "aliasName", field_name)
-		if current_alias == resolved_alias:
-			continue
-
-		try:
-			arcpy.management.AlterField(
-				dataset_path,
-				field_name,
-				new_field_alias=resolved_alias,
-			)
-			changes.append({
-				"field_name": field_name,
-				"old_alias": current_alias,
-				"new_alias": resolved_alias,
-			})
-		except Exception as exc:
-			errors.append({
-				"field_name": field_name,
-				"error": str(exc),
-			})
-
-	return {
-		"dataset_path": dataset_path,
-		"exists": True,
-		"error": None,
-		"fields_processed": len(fields),
-		"fields_changed": len(changes),
-		"fields_skipped": len(skipped),
-		"fields_errored": len(errors),
-		"changes": changes,
-		"skipped": skipped,
-		"errors": errors,
-	}
-
+        layer_cim.popupInfo = popup_info
+        layer.setDefinition(layer_cim)
+        LOGGER.debug(
+            "set_cim_popup_info_fields_by_yml: updated '%s' (useLayerFields=True, title=%r, %d fields)",
+            layer_name,
+            expected_title,
+            len(visible_field_names),
+        )
+        return (
+            False,
+            True,
+            f"Popup configured with {len(visible_field_names)} visible fields, title {expected_title!r}",
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "set_cim_popup_info_fields_by_yml: failed for '%s': %s", layer_name, exc
+        )
+        return None, False, f"Could not set popupInfo: {exc}"

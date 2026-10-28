@@ -43,38 +43,30 @@ def set_map_metadata_from_config(
         if map_metadata_cfg.get("license"):
             md.accessConstraints = map_metadata_cfg.get("license")
         map_obj.metadata = md
-        LOGGER.info("Map metadata updated from config.")
     except Exception as exc:
         LOGGER.error("Failed to set metadata: %s", exc)
 
 
 def enable_unique_numeric_ids(map_obj: Any) -> bool:
-    """Enable map-level service layer IDs for publishing when supported.
+    """Enable map-level service layer IDs for publishing.
+
+    Strict mode: only ``useServiceLayerIDs`` is supported.
 
     :param map_obj: ArcGIS Pro map object.
     :return: ``True`` if setting was applied, otherwise ``False``.
     """
     try:
         map_cim = map_obj.getDefinition("V3")
-        if hasattr(map_cim, "useServiceLayerIDs"):
-            map_cim.useServiceLayerIDs = True
-            map_obj.setDefinition(map_cim)
-            LOGGER.debug("Unique numeric IDs enabled via 'useServiceLayerIDs'.")
-            return True
+        if not hasattr(map_cim, "useServiceLayerIDs"):
+            LOGGER.error(
+                "enable_unique_numeric_ids: missing CIM field 'useServiceLayerIDs' on map '%s'",
+                getattr(map_obj, "name", "<unknown>"),
+            )
+            return False
 
-        for attr in [
-            "allowAssignmentOfUniqueNumericIds",
-            "allowAssignmentOfUniqueNumericIDs",
-            "allowAssigningUniqueNumericIds",
-            "allowAssigningUniqueNumericIDs",
-        ]:
-            if hasattr(map_cim, attr):
-                setattr(map_cim, attr, True)
-                map_obj.setDefinition(map_cim)
-                LOGGER.debug("Unique numeric IDs enabled via CIM attribute '%s'.", attr)
-                return True
-
-        return False
+        map_cim.useServiceLayerIDs = True
+        map_obj.setDefinition(map_cim)
+        return True
     except Exception as exc:
         LOGGER.error("Failed to enable unique numeric IDs: %s", exc)
         return False

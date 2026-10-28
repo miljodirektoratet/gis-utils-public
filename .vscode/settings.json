@@ -14,7 +14,7 @@
     "activityBar.background": "#181818",
     "titleBar.activeBackground": "#181818",
     "titleBar.activeForeground": "#cccccc"
-  },  
+  },
 
   // Python formatting
   "[python]": {
@@ -26,7 +26,14 @@
     ".venv/bin/python",
   ],
   "autoDocstring.docstringFormat": "one-line-sphinx",
-  "python.useEnvironmentsExtension": true, // Use Python Envy instead
+  "python.useEnvironmentsExtension": true, // Use Python Envy for .venv
+  "python-envs.pythonProjects": [
+    {
+      "path": ".",
+      "envManager": "ms-python.python:conda",
+      "packageManager": "ms-python.python:conda"
+    }
+  ],
 
   // YAML formatting
   "[yaml]": {
@@ -39,6 +46,8 @@
     "editor.formatOnSave": true,
     "editor.tabSize": 2
   },
+  "prettier.printWidth": 88,
+  "prettier.proseWrap": "always",
 
   // TOML formatting
   "[toml]": {
@@ -63,15 +72,8 @@
   "git.branchProtection": ["main"],
   "git.allowNoVerifyCommit": true,
   "git.confirmNoVerifyCommit": false,
-  
+
   // Docker
   "containers.contexts.showInStatusBar": true,
-  "python-envs.pythonProjects": [
-    {
-      "path": ".",
-      "envManager": "ms-python.python:conda",
-      "packageManager": "ms-python.python:conda"
-    }
-  ],
-  
+
 }
