@@ -35,30 +35,30 @@ dependencies = [
 dev = [
   # DevOps
   "pytest==9.1.1",
-  "ruff==0.16.0",
-  "ipykernel==7.3.0",
+  "ruff==0.17.2",
+  "ipykernel==7.4.0",
   "deptry>=0.25.1",
   "mypy>=2.3.0",
   "pre-commit>=4.6.0",
   "pytest-cov>=7.1.0",
   "types-pyyaml>=6.0.12.20260518",
   "zizmor>=1.27.0",
-  "python-dotenv==1.2.2",
+  "python-dotenv==1.2.4",
 
   # Azure
   "azure-common==1.1.28",
   "azure-core==1.41.0",
   "azure-keyvault==4.2.0",
-  "azure-keyvault-certificates==4.11.1",
-  "azure-keyvault-keys==4.11.1",
-  "azure-keyvault-secrets==4.11.0",
+  "azure-keyvault-certificates==4.11.3",
+  "azure-keyvault-keys==4.11.3",
+  "azure-keyvault-secrets==4.11.3",
   "azure-mgmt-core==1.6.0",
-  "azure-mgmt-storage==25.1.0",
+  "azure-mgmt-storage==25.3.0",
   "isodate==0.7.2",
 
   # Database
-  "psycopg2==2.9.12",
-  "pymssql==2.3.13",
+  "psycopg2==2.9.13",
+  "pymssql==2.4.5",
 ]
 
 pytorch = [
