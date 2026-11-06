@@ -64,6 +64,6 @@ jobs:
           python-version: "3.13"
 
       - name: Build and inspect package artifacts
-        uses: hynek/build-and-inspect-python-package@efb823f52190ad02594531168b7a2d5790e66516 # v2.14.0
-        env:
-          UV_PYTHON: "3.13"
+        uses: hynek/build-and-inspect-python-package@67230f7b8410ae0052b39c1efc89d89fff43ff10 # v3.0.2
+        with:
+          python-version: "3.13"
