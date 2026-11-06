@@ -60,3 +60,5 @@ jobs:
 
       - name: Build and inspect package artifacts
         uses: hynek/build-and-inspect-python-package@efb823f52190ad02594531168b7a2d5790e66516 # v2.14.0
+        with:
+          python-version: "3.13"
