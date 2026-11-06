@@ -5,7 +5,13 @@
 
 version: 2
 updates:
-  # NOTE: GitHub Actions dependencies not included to many conflicts with zizmor scans.
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    rebase-strategy: auto
+    target-branch: main
+    schedule:
+      interval: "weekly"
 
   # Python dependencies (uv ecosystem)
   # Dependabot supports uv, which aligns with this repository's package manager.
@@ -13,16 +19,34 @@ updates:
     directory: /
     rebase-strategy: auto
     target-branch: main
+    # Major version should be updated manually
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     schedule: # dependabot does not support cron
       interval: monthly
       time: "12:00"
       timezone: Europe/Oslo
     open-pull-requests-limit: 3
     groups:
+      # Pytorch packages are grouped into one PR
+      pytorch-dependencies:
+        patterns:
+          - "torch"
+          - "torchvision"
+          - "torchaudio"
+          - "cupy-cuda12x"
+          - "thor-terratorch-ext"
       python-dependencies:
         patterns:
           - "*"
         exclude-patterns:
+          - torch
+          - torchvision
+          - torchaudio
+          - cupy-cuda12x
+          - thor-terratorch-ext
           - gis-utils-public* # Exclude the local package itself
     cooldown:
       default-days: 7
