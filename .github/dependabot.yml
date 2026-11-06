@@ -7,8 +7,9 @@ version: 2
 updates:
   # NOTE: GitHub Actions dependencies not included to many conflicts with zizmor scans.
 
-  # Python dependencies (pip ecosystem for uv projects)
-  - package-ecosystem: pip
+  # Python dependencies (uv ecosystem)
+  # Dependabot supports uv, which aligns with this repository's package manager.
+  - package-ecosystem: uv
     directory: /
     rebase-strategy: auto
     target-branch: main
@@ -22,19 +23,6 @@ updates:
         patterns:
           - "*"
         exclude-patterns:
-          - ml_ajourhold* # Exclude the local package itself
+          - gis-utils-public* # Exclude the local package itself
     cooldown:
       default-days: 7
-
-  # Docker - Devcontainers
-  - package-ecosystem: "devcontainers"
-    directory: /
-    rebase-strategy: auto
-    target-branch: main
-    schedule:
-      interval: monthly
-      time: "18:00"
-      timezone: Europe/Oslo
-    cooldown:
-      default-days: 7
-# TODO: Check if adding Docker ecosystem would be smart.
