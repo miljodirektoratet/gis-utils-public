@@ -42,9 +42,8 @@ dev = [
   "pre-commit>=4.6.0",
   "pytest-cov>=7.1.0",
   "types-pyyaml>=6.0.12.20260518",
-  "zizmor>=1.27.0",
+  "zizmor>=1.32.0",
   "python-dotenv==1.2.4",
-
   # Azure
   "azure-common==1.1.28",
   "azure-core==1.41.0",
@@ -55,7 +54,6 @@ dev = [
   "azure-mgmt-core==1.6.0",
   "azure-mgmt-storage==25.3.0",
   "isodate==0.7.2",
-
   # Database
   "psycopg2==2.9.13",
   "pymssql==2.4.6",
